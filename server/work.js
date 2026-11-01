@@ -111,10 +111,11 @@ export function dailyWork({day,worked=0,duty=0,approved=[],holiday=false,overtim
   const mission=approved.filter(x=>x.type==='mission').reduce((sum,x)=>sum+x.minutes,0);
   const credited=Math.min(expected,leave+mission);
   const shortage=Math.max(0,expected-Math.min(expected,in_shift)-credited);
+  const absent=expected>0&&rounded===0&&credited===0;
   const extra=Math.max(0,rounded-expected,window_extra);
   const overtime=friday||holiday||!hasShift||expected===0?0:Math.min(extra,Math.max(0,overtimeCap));
   const surplus=friday||holiday||!hasShift||expected===0?0:Math.max(0,extra-overtime);
-  return {day,worked:rounded,in_shift:Math.floor(in_shift),expected,leave,mission,shortage,surplus,overtime,night,
+  return {day,worked:rounded,in_shift:Math.floor(in_shift),expected,leave,mission,shortage,absence:absent?shortage:0,absence_days:absent?1:0,absence_and_shortage:shortage,surplus,overtime,night,
     late_in:friday||holiday||!hasShift?0:late_in,early_out:friday||holiday||!hasShift?0:early_out,
     friday_work:friday?rounded:0,holiday_work:holiday&&!friday?rounded:0,
     // Friday/holiday categories remain mutually exclusive; financial policy must not add them twice.
@@ -122,6 +123,6 @@ export function dailyWork({day,worked=0,duty=0,approved=[],holiday=false,overtim
     regular_extra:!friday&&!holiday?extra:0};
 }
 export function sumWork(rows) {
-  const keys=['worked','in_shift','expected','leave','mission','shortage','surplus','overtime','night','late_in','early_out','total_overtime','friday_work','holiday_work','regular_extra'];
+  const keys=['worked','in_shift','expected','leave','mission','shortage','absence','absence_days','absence_and_shortage','surplus','overtime','night','late_in','early_out','total_overtime','friday_work','holiday_work','regular_extra'];
   return Object.fromEntries(keys.map(k=>[k,rows.reduce((total,r)=>total+r[k],0)]));
 }

@@ -34,6 +34,16 @@ test('monthly summary is a simple non-duplicating sum',()=>{
   assert.equal(sum.holiday_work,0);assert.equal(sum.shortage,30);
 });
 
+test('absence is reported separately without adding it twice to shortage',()=>{
+  const absent=dailyWork({day:'2026-11-02',worked:0,duty:480});
+  assert.equal(absent.absence,480);assert.equal(absent.absence_days,1);
+  assert.equal(absent.shortage,480);assert.equal(absent.absence_and_shortage,480);
+  const credited=dailyWork({day:'2026-11-02',worked:0,duty:480,approved:[{type:'annual_leave',minutes:120}]});
+  assert.equal(credited.absence,0);assert.equal(credited.shortage,360);
+  const total=sumWork([absent,credited]);assert.equal(total.absence,480);
+  assert.equal(total.absence_and_shortage,840);
+});
+
 test('weekly, rotating and floating shifts use independent duty rules',()=>{
   const weekly={duty_minutes:480,schedule_kind:'weekly',schedule_json:JSON.stringify({days:[1,2,3,4]})};
   assert.equal(dutyForDay(weekly,'2026-11-02'),480);

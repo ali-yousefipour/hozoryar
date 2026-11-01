@@ -1,6 +1,6 @@
 {
   "name": "hozoryar",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,8 @@
     "bootstrap": "node server/bootstrap.js",
     "platform-admin": "node server/platform-admin.js",
     "backup": "node server/backup.js",
+    "verify-backup": "node server/verify-backup.js",
+    "restore-backup": "node server/restore-backup.js",
     "test": "node --test tests/*.test.js"
   },
   "engines": { "node": ">=22.13.0" }

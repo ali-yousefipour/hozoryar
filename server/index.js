@@ -7,6 +7,7 @@ import { issueSession, resolveSession, verifyPassword, revokeSession, passwordHa
 import { attendanceMetrics, dailyWork, dutyForDay, localInstant, sessionsByEntryDate, sumWork, tehranDate } from './work.js';
 import { calendarDays, jalaliMonthBounds } from './calendar.js';
 import { loadOfficialCalendar } from './official-calendar.js';
+import { archivedWorkXlsx } from './xlsx.js';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
 const logo = resolve(fileURLToPath(new URL('../branding/hozoryar-logo.png', import.meta.url)));
@@ -145,7 +146,14 @@ async function api(req,res,url) {
     const total=db.prepare('SELECT COUNT(*) n FROM users WHERE company_id=? AND active=1').get(cid).n;
     const present=db.prepare(`SELECT COUNT(*) n FROM attendance a JOIN users u ON u.id=a.user_id AND u.company_id=a.company_id
        WHERE a.company_id=? AND a.checked_out_at IS NULL AND u.active=1`).get(cid).n;
-    return json(res,200,{total,present,absent:total-present,company:user.company_name});
+    const end=url.searchParams.get('to')||tehranDate(new Date());
+    const start=url.searchParams.get('from')||new Date(Date.parse(end)-6*86400000).toISOString().slice(0,10);
+    if(!validDay(start)||!validDay(end)||start>end||Date.parse(end)-Date.parse(start)>35*86400000)throw fail(400,'بازه آمار باید حداکثر ۳۵ روز باشد');
+    const arrivals=db.prepare(`SELECT date(a.checked_in_at,'+210 minutes') day,COUNT(*) sessions,COUNT(DISTINCT a.user_id) employees
+      FROM attendance a JOIN users u ON u.id=a.user_id AND u.company_id=a.company_id
+      WHERE a.company_id=? AND u.active=1 AND date(a.checked_in_at,'+210 minutes') BETWEEN ? AND ? GROUP BY day ORDER BY day`)
+      .all(cid,start,end);
+    return json(res,200,{total,present,absent:total-present,company:user.company_name,period:{from:start,to:end},arrivals});
   }
   if (path==='/api/users' && method==='GET') {
     admin(user);return json(res,200,{items:db.prepare('SELECT id,name,username,role,active FROM users WHERE company_id=? ORDER BY id DESC').all(user.company_id)});
@@ -253,15 +261,55 @@ async function api(req,res,url) {
   }
   if(path==='/api/work-months' && method==='GET') {
     admin(user);
-    const items=db.prepare('SELECT month,created_at,created_by FROM work_month_archives WHERE company_id=? ORDER BY month DESC LIMIT 36').all(user.company_id);
+    const items=db.prepare(`SELECT a.month,a.created_at,a.created_by,COALESCE(r.status,'pending_review') review_status
+      FROM work_month_archives a LEFT JOIN work_month_reviews r ON r.company_id=a.company_id AND r.month=a.month
+      WHERE a.company_id=? ORDER BY a.month DESC LIMIT 36`).all(user.company_id);
     return json(res,200,{items});
+  }
+  const exportMatch=/^\/api\/work-months\/((?:j-)?\d{4}-\d{2})\/xlsx$/.exec(path);
+  if(exportMatch&&method==='GET'){
+    admin(user);const month=exportMatch[1];monthBounds(month);
+    const row=db.prepare('SELECT snapshot_json FROM work_month_archives WHERE company_id=? AND month=?').get(user.company_id,month);
+    if(!row)throw fail(404,'گزارش بایگانی یافت نشد');
+    const data=archivedWorkXlsx(JSON.parse(row.snapshot_json));
+    res.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'content-disposition':`attachment; filename="hozoryar-${month}.xlsx"`,'content-length':data.length,'cache-control':'no-store','x-content-type-options':'nosniff'});
+    return res.end(data);
   }
   const archiveMatch=/^\/api\/work-months\/(j-)?(\d{4}-\d{2})$/.exec(path);
   if(archiveMatch && method==='GET') {
     admin(user);const month=archiveMatch[0].split('/').at(-1);monthBounds(month);
-    const row=db.prepare('SELECT snapshot_json,created_at,created_by FROM work_month_archives WHERE company_id=? AND month=?').get(user.company_id,month);
+    const row=db.prepare(`SELECT a.snapshot_json,a.created_at,a.created_by,COALESCE(r.status,'pending_review') review_status,
+      r.reviewer_user_id,r.reviewed_at,r.approver_user_id,r.approved_at
+      FROM work_month_archives a LEFT JOIN work_month_reviews r ON r.company_id=a.company_id AND r.month=a.month
+      WHERE a.company_id=? AND a.month=?`).get(user.company_id,month);
     if(!row)throw fail(404,'بایگانی این ماه وجود ندارد');
-    return json(res,200,{...JSON.parse(row.snapshot_json),created_at:row.created_at,created_by:row.created_by});
+    const {snapshot_json,...meta}=row;return json(res,200,{...JSON.parse(snapshot_json),...meta});
+  }
+  const reviewMatch=/^\/api\/work-months\/((?:j-)?\d{4}-\d{2})\/(review|approve)$/.exec(path);
+  if(reviewMatch&&method==='POST'){
+    admin(user);const [,month,action]=reviewMatch;monthBounds(month);
+    if(action==='approve')owner(user);
+    db.exec('BEGIN IMMEDIATE');
+    try{
+      if(!db.prepare('SELECT 1 FROM work_month_archives WHERE company_id=? AND month=?').get(user.company_id,month))throw fail(404,'بایگانی یافت نشد');
+      const review=db.prepare('SELECT * FROM work_month_reviews WHERE company_id=? AND month=?').get(user.company_id,month);
+      const current=review?.status||'pending_review';
+      if(action==='review'){
+        if(current!=='pending_review')throw fail(409,'این دوره قبلاً بررسی شده است');
+        const hasManager=db.prepare("SELECT COUNT(*) n FROM users WHERE company_id=? AND role='manager' AND active=1").get(user.company_id).n>0;
+        if(hasManager&&user.role!=='manager')throw fail(403,'بررسی اولیه باید توسط مدیر میانی انجام شود');
+        db.prepare(`INSERT INTO work_month_reviews(company_id,month,status,reviewer_user_id,reviewed_at) VALUES(?,?,?,?,?)
+          ON CONFLICT(company_id,month) DO UPDATE SET status=excluded.status,reviewer_user_id=excluded.reviewer_user_id,reviewed_at=excluded.reviewed_at`)
+          .run(user.company_id,month,'reviewed',user.id,new Date().toISOString());
+      }else{
+        if(current!=='reviewed')throw fail(409,'ابتدا باید بررسی اولیه انجام شود');
+        db.prepare(`UPDATE work_month_reviews SET status='approved',approver_user_id=?,approved_at=? WHERE company_id=? AND month=?`)
+          .run(user.id,new Date().toISOString(),user.company_id,month);
+      }
+      audit(user,'work_month.'+action,'work_month',null);
+      db.exec('COMMIT');return json(res,200,{ok:true,status:action==='review'?'reviewed':'approved',authoritative:false});
+    }catch(e){db.exec('ROLLBACK');throw e;}
   }
   if(path==='/api/work-months/finalize' && method==='POST') {
     owner(user);const {month}=await body(req),{from,to}=monthBounds(month);
@@ -281,6 +329,7 @@ async function api(req,res,url) {
         note:'این سند ثابت از تقویم مستقل برخط یا آخرین نسخه ذخیره‌شده استفاده کرده و تأیید حقوق و دستمزد نیست.',reports};
       db.prepare('INSERT INTO work_month_archives(company_id,month,snapshot_json,created_by) VALUES(?,?,?,?)')
         .run(user.company_id,month,JSON.stringify(snapshot),user.id);
+      db.prepare('INSERT INTO work_month_reviews(company_id,month) VALUES(?,?)').run(user.company_id,month);
       audit(user,'work_month.archive','work_month',null);
       db.exec('COMMIT');return json(res,201,{ok:true,month,users:people.length,status:'archived',authoritative:false});
     } catch(e){db.exec('ROLLBACK');throw e;}
@@ -330,9 +379,22 @@ async function api(req,res,url) {
     feature(user,'monitoring');const b=await body(req);
     if(!validCoords(b.lat,b.lng,b.accuracy)) throw fail(400,'مختصات نامعتبر است');
     if(!db.prepare('SELECT id FROM attendance WHERE company_id=? AND user_id=? AND checked_out_at IS NULL').get(user.company_id,user.id)) throw fail(403,'ثبت موقعیت فقط در حضور فعال مجاز است');
+    const capturedAt=new Date().toISOString();
     db.prepare(`INSERT INTO locations(company_id,user_id,lat,lng,accuracy,recorded_at) VALUES(?,?,?,?,?,?)
       ON CONFLICT(company_id,user_id) DO UPDATE SET lat=excluded.lat,lng=excluded.lng,accuracy=excluded.accuracy,recorded_at=excluded.recorded_at`)
-      .run(user.company_id,user.id,b.lat,b.lng,b.accuracy??null,new Date().toISOString());return json(res,200,{ok:true});
+      .run(user.company_id,user.id,b.lat,b.lng,b.accuracy??null,capturedAt);
+    db.prepare('INSERT INTO location_history(company_id,user_id,lat,lng,accuracy,recorded_at) VALUES(?,?,?,?,?,?)')
+      .run(user.company_id,user.id,b.lat,b.lng,b.accuracy??null,capturedAt);
+    db.prepare("DELETE FROM location_history WHERE company_id=? AND julianday(recorded_at)<julianday('now','-30 days')").run(user.company_id);
+    return json(res,200,{ok:true});
+  }
+  if(path==='/api/location-history'&&method==='GET'){
+    admin(user);feature(user,'monitoring');
+    const id=Number(url.searchParams.get('user_id'));
+    if(!Number.isInteger(id)||!ownUser(user,id))throw fail(404,'کارمند یافت نشد');
+    const items=db.prepare(`SELECT lat,lng,accuracy,recorded_at FROM location_history
+      WHERE company_id=? AND user_id=? ORDER BY recorded_at DESC LIMIT 250`).all(user.company_id,id);
+    return json(res,200,{items,retention_days:30});
   }
   if (path==='/api/live-map' && method==='GET') {
     admin(user);feature(user,'liveMap');

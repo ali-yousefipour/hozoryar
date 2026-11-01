@@ -37,6 +37,8 @@ test('different companies have separate users, settings and dashboard',async()=>
   assert.equal((await api('/api/users',b)).body.items.length,1);
   assert.equal((await api('/api/dashboard',a)).body.total,2);
   assert.equal((await api('/api/dashboard',b)).body.total,1);
+  assert.equal((await api('/api/dashboard?from=2026-10-20&to=2026-10-22',a)).body.arrivals.length,0);
+  assert.equal((await api('/api/dashboard?from=2026-09-01&to=2026-11-01',a)).status,400);
   assert.equal((await api('/api/settings',a)).body.neshan_key_configured,false);
   assert.equal((await api('/api/settings',b,'PATCH',{map_provider:'neshan',neshan_api_key:'company-b-secret'})).status,200);
   const sa=(await api('/api/settings',a)).body,sb=(await api('/api/settings',b)).body;
@@ -47,6 +49,8 @@ test('different companies have separate users, settings and dashboard',async()=>
 test('attendance, location, live map are isolated across tenants',async()=>{
   assert.equal((await api('/api/attendance',a,'POST',{action:'in',lat:36.3,lng:59.6,accuracy:10})).status,201);
   assert.equal((await api('/api/location',a,'POST',{lat:36.3,lng:59.6,accuracy:10})).status,200);
+  assert.equal((await api('/api/location-history?user_id=1',a)).body.items.length,1);
+  assert.equal((await api('/api/location-history?user_id=1',b)).status,404);
   assert.equal((await api('/api/live-map',a)).body.items.length,1);
   assert.equal((await api('/api/live-map',b)).body.items.length,0);
   assert.equal((await api('/api/dashboard',b)).body.present,0);
@@ -129,6 +133,9 @@ test('calendar holidays and overnight report remain tenant-scoped',async()=>{
   assert.equal(report.body.days[0].in_shift,480);
   assert.equal(report.body.days[1].worked,0);
   assert.equal((await api('/api/work-report?from=2026-10-20&to=2026-10-21',b)).body.totals.worked,0);
+  const trend=(await api('/api/dashboard?from=2026-10-20&to=2026-10-21',a)).body.arrivals;
+  assert.equal(trend.length,1);assert.equal(trend[0].employees,1);
+  assert.equal((await api('/api/dashboard?from=2026-10-20&to=2026-10-21',b)).body.arrivals.length,0);
 });
 
 test('online cached holiday is used in work reporting and Friday is not double-counted',async()=>{
@@ -202,6 +209,31 @@ test('Jalali monthly archives use exact Persian boundaries and separate keys',as
   assert.equal(snapshot.authoritative,false);
   assert.equal((await api('/api/work-months/j-1405-07',b)).status,404);
   assert.equal((await api('/api/work-months/finalize',a,'POST',{month:'j-1405-08'})).status,409);
+});
+
+test('archived work reports receive separate manager review and owner approval, never payroll authority',async()=>{
+  const manager=(await api('/api/login',null,'POST',{company:'alpha',username:'middle',password:'strong-password-123'})).body.token;
+  const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
+  const path='/api/work-months/j-1405-07';
+  assert.equal((await api(path+'/approve',a,'POST')).status,409);
+  assert.equal((await api(path+'/review',staff,'POST')).status,403);
+  assert.equal((await api(path+'/review',a,'POST')).status,403);
+  assert.equal((await api(path+'/review',manager,'POST')).status,200);
+  assert.equal((await api(path+'/review',manager,'POST')).status,409);
+  assert.equal((await api(path+'/approve',manager,'POST')).status,403);
+  const approved=await api(path+'/approve',a,'POST');
+  assert.equal(approved.status,200);assert.equal(approved.body.authoritative,false);
+  assert.equal((await api(path+'/approve',a,'POST')).status,409);
+  assert.equal((await api(path,b)).status,404);
+  const snapshot=(await api(path,a)).body;
+  assert.equal(snapshot.review_status,'approved');
+  assert.equal(snapshot.authoritative,false);
+  assert.equal((await api('/api/work-months',a)).body.items.find(x=>x.month==='j-1405-07').review_status,'approved');
+  const xlsx=await fetch(origin+path+'/xlsx',{headers:{Authorization:'Bearer '+a}});
+  assert.equal(xlsx.status,200);
+  assert.match(xlsx.headers.get('content-type'),/spreadsheetml/);
+  assert.equal((await xlsx.arrayBuffer()).byteLength>1000,true);
+  assert.equal((await fetch(origin+path+'/xlsx',{headers:{Authorization:'Bearer '+b}})).status,404);
 });
 
 test('platform administrator alone can configure per-company subscription and personnel quota',async()=>{

@@ -62,6 +62,13 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       recorded_at TEXT NOT NULL, PRIMARY KEY(company_id,user_id),
       FOREIGN KEY(company_id,user_id) REFERENCES users(company_id,id)
     );
+    CREATE TABLE IF NOT EXISTS location_history (
+      id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,user_id INTEGER NOT NULL,
+      lat REAL NOT NULL,lng REAL NOT NULL,accuracy REAL,
+      recorded_at TEXT NOT NULL,
+      FOREIGN KEY(company_id,user_id) REFERENCES users(company_id,id)
+    );
+    CREATE INDEX IF NOT EXISTS location_history_employee_date ON location_history(company_id,user_id,recorded_at);
     CREATE TABLE IF NOT EXISTS company_settings (
       company_id INTEGER PRIMARY KEY REFERENCES companies(id),
       map_provider TEXT NOT NULL DEFAULT 'osm',
@@ -114,6 +121,16 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       PRIMARY KEY(company_id,month),
       FOREIGN KEY(company_id,created_by) REFERENCES users(company_id,id),
       CHECK(length(month) IN (7,9))
+    );
+    CREATE TABLE IF NOT EXISTS work_month_reviews (
+      company_id INTEGER NOT NULL, month TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending_review' CHECK(status IN ('pending_review','reviewed','approved')),
+      reviewer_user_id INTEGER, reviewed_at TEXT,
+      approver_user_id INTEGER, approved_at TEXT,
+      PRIMARY KEY(company_id,month),
+      FOREIGN KEY(company_id,month) REFERENCES work_month_archives(company_id,month),
+      FOREIGN KEY(company_id,reviewer_user_id) REFERENCES users(company_id,id),
+      FOREIGN KEY(company_id,approver_user_id) REFERENCES users(company_id,id)
     );
   `);
   // Existing 0.1/0.2 databases are upgraded in place without touching tenant data.
