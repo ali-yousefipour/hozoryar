@@ -4,7 +4,8 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './db.js';
 import { issueSession, resolveSession, verifyPassword, revokeSession, passwordHash } from './auth.js';
-import { dailyWork, dutyForDay, nightMinutes, splitSessionDetails, sumWork } from './work.js';
+import { attendanceMetrics, dailyWork, dutyForDay, sessionsByEntryDate, sumWork } from './work.js';
+import { calendarDays } from './calendar.js';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
 const logo = resolve(fileURLToPath(new URL('../branding/hozoryar-logo.png', import.meta.url)));
@@ -83,6 +84,7 @@ async function api(req,res,url) {
     if(!['fixed','weekly','rotating','floating'].includes(kind))throw fail(400,'نوع شیفت نامعتبر است');
     if(kind==='weekly'&&(!Array.isArray(config.days)||config.days.some(x=>!Number.isInteger(x)||x<0||x>6)||new Set(config.days).size!==config.days.length))throw fail(400,'روزهای شیفت هفتگی نامعتبر است');
     if(kind==='rotating'&&(!Number.isInteger(config.work)||config.work<1||config.work>30||!Number.isInteger(config.rest)||config.rest<1||config.rest>30||!/^\d{4}-\d{2}-\d{2}$/.test(config.anchor||'')||Number.isNaN(Date.parse(config.anchor))))throw fail(400,'چرخه شیفت نامعتبر است');
+    if(['late_ok','early_ok','ot_begin','ot_end'].some(k=>config[k]!==undefined&&(!Number.isInteger(config[k])||config[k]<0||config[k]>360)))throw fail(400,'تلورانس یا پنجره اضافه‌کاری نامعتبر است');
     const result=db.prepare('INSERT INTO shifts(company_id,name,start_time,end_time,duty_minutes,daily_ot_cap,schedule_kind,schedule_json) VALUES(?,?,?,?,?,?,?,?)').run(user.company_id,b.name,b.start_time,b.end_time,b.duty_minutes,cap,kind,JSON.stringify(config));
     audit(user,'shift.create','shift',Number(result.lastInsertRowid));return json(res,201,{id:Number(result.lastInsertRowid)});
   }
@@ -137,6 +139,12 @@ async function api(req,res,url) {
   if(path==='/api/holidays' && method==='GET') {
     return json(res,200,{items:db.prepare('SELECT work_date,title FROM company_holidays WHERE company_id=? ORDER BY work_date').all(user.company_id)});
   }
+  if(path==='/api/calendar' && method==='GET') {
+    const from=url.searchParams.get('from'),to=url.searchParams.get('to');
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(from||'')||!/^\d{4}-\d{2}-\d{2}$/.test(to||'')||!Number.isFinite(Date.parse(from))||!Number.isFinite(Date.parse(to))||from>to||Date.parse(to)-Date.parse(from)>35*86400000)throw fail(400,'بازه تقویم نامعتبر است');
+    const manual=new Map(db.prepare('SELECT work_date,title FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(user.company_id,from,to).map(r=>[r.work_date,r.title]));
+    return json(res,200,{days:calendarDays(from,to,manual),official_calendar_available:false,note:'تعطیلات رسمی هنوز از منبع رسمی بارگذاری نشده‌اند؛ تنها جمعه و تعطیلات اختصاصی شرکت مبنای محاسبه‌اند.'});
+  }
   if(path==='/api/holidays' && method==='POST') {
     owner(user);const b=await body(req);
     if(!/^\d{4}-\d{2}-\d{2}$/.test(b.work_date||'')||Number.isNaN(Date.parse(b.work_date))||!str(b.title,120)) throw fail(400,'تاریخ یا عنوان تعطیلی نامعتبر است');
@@ -152,17 +160,18 @@ async function api(req,res,url) {
     const rows=db.prepare(`SELECT checked_in_at,checked_out_at FROM attendance WHERE company_id=? AND user_id=?
       AND checked_in_at<=? AND (checked_out_at IS NULL OR checked_out_at>=?) ORDER BY checked_in_at`)
       .all(user.company_id,targetId,new Date(Date.parse(to)+2*86400000).toISOString(),new Date(Date.parse(from)-2*86400000).toISOString());
-    const sessions=splitSessionDetails(rows,from,to);
-    const assignment=db.prepare(`SELECT s.duty_minutes,s.daily_ot_cap,s.schedule_kind,s.schedule_json FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
+    const sessions=sessionsByEntryDate(rows,from,to);
+    const assignment=db.prepare(`SELECT s.duty_minutes,s.daily_ot_cap,s.start_time,s.end_time,s.schedule_kind,s.schedule_json FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
        WHERE a.company_id=? AND a.user_id=?`).get(user.company_id,targetId);
     const requests=db.prepare(`SELECT type,work_date,minutes FROM personnel_requests
        WHERE company_id=? AND user_id=? AND status='approved' AND work_date BETWEEN ? AND ?`).all(user.company_id,targetId,from,to);
     const holidays=new Set(db.prepare('SELECT work_date FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(user.company_id,from,to).map(x=>x.work_date));
     const days=[],cursor=new Date(from+'T12:00:00Z'),limit=new Date(to+'T12:00:00Z');
     while(cursor<=limit){const day=cursor.toISOString().slice(0,10),parts=sessions.get(day)||[];
-      const worked=parts.reduce((total,p)=>total+(p.end-p.start)/60000,0);
-      days.push(dailyWork({day,worked,night:nightMinutes(parts,day),duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
-    return json(res,200,{user_id:targetId,from,to,days,totals:sumWork(days),authoritative:false,engine:'hozoryar-work-v2',reference:'khatyar/php/lib/ShiftCalc.php',note:'گزارش مقدماتی: سقف اضافه‌کاری روزانه و شب‌کاری افزوده شده‌اند. تقویم رسمی، پنجره‌های شیفت، تأخیر/تعجیل و قواعد سازمانی هنوز تطبیق کامل نشده‌اند؛ برای حقوق قطعی استفاده نشود.'});
+      const policy=assignment?JSON.parse(assignment.schedule_json||'{}'):{};
+      const metrics=attendanceMetrics(assignment,day,parts,policy);
+      days.push(dailyWork({day,...metrics,duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,hasShift:!!assignment,approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
+    return json(res,200,{user_id:targetId,from,to,days,totals:sumWork(days),authoritative:false,engine:'hozoryar-work-v3',reference:'khatyar/php/lib/ShiftCalc.php',note:'محاسبه شیفت و شب‌کاری بر مبنای تاریخ ورود و پنجره‌های شیفت انجام می‌شود. تقویم رسمی و سیاست‌های پیشرفته سازمانی هنوز تطبیق کامل نشده‌اند؛ برای حقوق قطعی استفاده نشود.'});
   }
   if (path==='/api/settings' && method==='GET') {
     owner(user);const s=settings(user.company_id);

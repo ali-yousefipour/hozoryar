@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dailyWork, dutyForDay, nightMinutes, splitSessionDetails, splitSessions, sumWork } from '../server/work.js';
+import { attendanceMetrics, dailyWork, dutyForDay, localInstant, nightMinutes, sessionsByEntryDate, splitSessionDetails, splitSessions, sumWork } from '../server/work.js';
 
 test('Friday is exclusive of a manually declared holiday',()=>{
   const friday=dailyWork({day:'2026-10-30',worked:600,duty:480,holiday:true});
@@ -59,4 +59,41 @@ test('Khatyar night period 22:00 to 06:00 is counted in Tehran time',()=>{
     '2026-11-01','2026-11-02',new Date('2026-11-02T04:00:00Z'));
   assert.equal(nightMinutes(parts.get('2026-11-01'), '2026-11-01'),120);
   assert.equal(nightMinutes(parts.get('2026-11-02'), '2026-11-02'),360);
+});
+
+test('overnight session belongs entirely to its check-in date in work report',()=>{
+  const sessions=[{checked_in_at:'2026-11-01T19:30:00Z',checked_out_at:'2026-11-02T03:30:00Z'}];
+  const grouped=sessionsByEntryDate(sessions,'2026-11-01','2026-11-02',new Date('2026-11-02T04:00:00Z'));
+  assert.equal(grouped.get('2026-11-01').length,1);
+  assert.equal(grouped.get('2026-11-02'),undefined);
+  const shift={start_time:'23:00',end_time:'07:00',schedule_kind:'fixed'};
+  const metrics=attendanceMetrics(shift,'2026-11-01',grouped.get('2026-11-01'));
+  assert.equal(metrics.worked,480);assert.equal(metrics.in_shift,480);
+  assert.equal(metrics.late_in,0);assert.equal(metrics.early_out,0);
+  assert.equal(metrics.night,420);
+});
+
+test('shift window computes late, early and valid before/after overtime',()=>{
+  const day='2026-11-02';
+  const parts=[{start:localInstant(day,8*60+20),end:localInstant(day,15*60+35)}];
+  const metrics=attendanceMetrics({start_time:'08:00',end_time:'16:00',schedule_kind:'fixed'},day,parts,{late_ok:5,early_ok:10,ot_begin:30,ot_end:30});
+  assert.equal(metrics.worked,435);assert.equal(metrics.in_shift,435);
+  assert.equal(metrics.late_in,15);assert.equal(metrics.early_out,15);
+  assert.equal(metrics.window_extra,0);
+  const report=dailyWork({day,...metrics,duty:480,overtimeCap:27});
+  assert.equal(report.shortage,45);
+});
+
+test('overtime windows count only approved margins and respect daily cap',()=>{
+  const day='2026-11-02';
+  const parts=[{start:localInstant(day,7*60+15),end:localInstant(day,16*60+45)}];
+  const metrics=attendanceMetrics({start_time:'08:00',end_time:'16:00',schedule_kind:'fixed'},day,parts,{ot_begin:30,ot_end:20});
+  assert.equal(metrics.worked,570);
+  assert.equal(metrics.in_shift,480);
+  assert.equal(metrics.window_extra,50);
+  assert.equal(metrics.late_in,0);
+  assert.equal(metrics.early_out,0);
+  const report=dailyWork({day,...metrics,duty:480,overtimeCap:27});
+  assert.equal(report.overtime,27);
+  assert.equal(report.surplus,63);
 });

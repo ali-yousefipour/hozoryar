@@ -105,3 +105,25 @@ test('two-step approvals require manager then company owner',async()=>{
   assert.equal(second.status,200);assert.equal(second.body.status,'approved');
   assert.equal((await api('/api/work-report?from=2026-11-03&to=2026-11-03',staff)).body.days[0].mission,120);
 });
+
+test('calendar holidays and overnight report remain tenant-scoped',async()=>{
+  const created=await api('/api/holidays',a,'POST',{work_date:'2026-11-04',title:'تعطیلی اختصاصی الف'});
+  assert.equal(created.status,200);
+  const ca=await api('/api/calendar?from=2026-11-04&to=2026-11-04',a);
+  const cb=await api('/api/calendar?from=2026-11-04&to=2026-11-04',b);
+  assert.equal(ca.body.days[0].is_manual_holiday,true);
+  assert.equal(cb.body.days[0].is_manual_holiday,false);
+  const shift=await api('/api/shifts',a,'POST',{name:'شب',start_time:'23:00',end_time:'07:00',duty_minutes:480,daily_ot_cap:27});
+  assert.equal(shift.status,201);
+  assert.equal((await api('/api/assignments',a,'POST',{user_id:3,shift_id:shift.body.id})).status,200);
+  const insert=openDatabase(process.env.DB_PATH);
+  insert.prepare('INSERT INTO attendance(company_id,user_id,checked_in_at,checked_out_at) VALUES(?,?,?,?)').run(1,3,'2026-10-20T19:30:00Z','2026-10-21T03:30:00Z');
+  insert.close();
+  const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
+  const report=await api('/api/work-report?from=2026-10-20&to=2026-10-21',staff);
+  assert.equal(report.status,200);
+  assert.equal(report.body.days[0].worked,480);
+  assert.equal(report.body.days[0].in_shift,480);
+  assert.equal(report.body.days[1].worked,0);
+  assert.equal((await api('/api/work-report?from=2026-10-20&to=2026-10-21',b)).body.totals.worked,0);
+});
