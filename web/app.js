@@ -100,12 +100,23 @@ async function requests(){const r=await request('/api/requests');const isAdmin=s
   $('#content').insertAdjacentHTML('afterbegin',`<div class="note" role="status">مانده مرخصی استحقاقی شما در سال ${fa(jalaliYear)}: <b>${fa(balance.remaining_minutes)} دقیقه</b> از سقف ${fa(balance.quota_minutes)} دقیقه (مصرف تأییدشده: ${fa(balance.used_minutes)} دقیقه). این مانده فقط مرخصی استحقاقی را پوشش می‌دهد.</div>`);
   document.querySelectorAll('.table tbody tr').forEach((row,i)=>{const item=r.items[i];if(!item)return;const cells=row.querySelectorAll('td');cells[2].textContent=item.work_date+(item.end_date&&item.end_date!==item.work_date?' تا '+item.end_date:'');cells[3].textContent=fa(item.minutes)+' دقیقه'+(item.unit==='daily'?' در هر روز':'');});
   $('#request-form .form-grid').insertAdjacentHTML('beforeend',`<label>واحد درخواست<select name="unit"><option value="hourly">ساعتی</option><option value="daily">روزانه</option></select></label><label>تاریخ پایان (برای درخواست چندروزه)<input name="end_date" type="date"></label>`);
+  $('#request-form .form-grid').insertAdjacentHTML('beforeend',`<label id="substitute-label" class="hidden">جانشین مرخصی<select name="substitute_user_id"><option value="">بدون جانشین</option></select><small id="substitute-help" class="muted" role="status">جانشین‌های مجاز با توجه به تاریخ بررسی می‌شوند.</small></label>`);
   $('#request-form [name=type]').insertAdjacentHTML('beforeend','<option value="unpaid_leave">مرخصی بدون حقوق</option>');
   $('#request-form [name=description]').required=false;
-  const unitInput=$('#request-form [name=unit]'),endInput=$('#request-form [name=end_date]'),minutesInput=$('#request-form [name=minutes]');
-  unitInput.onchange=()=>{const daily=unitInput.value==='daily';endInput.disabled=!daily;if(!daily)endInput.value='';minutesInput.value=daily?'480':'120';minutesInput.closest('label').firstChild.textContent=daily?'مدت هر روز به دقیقه':'مدت به دقیقه';};
+  const unitInput=$('#request-form [name=unit]'),endInput=$('#request-form [name=end_date]'),minutesInput=$('#request-form [name=minutes]'),typeInput=$('#request-form [name=type]'),startInput=$('#request-form [name=work_date]'),subInput=$('#request-form [name=substitute_user_id]');
+  let subLoad=0;
+  async function refreshSubstitutes(){const index=++subLoad,active=unitInput.value==='daily'&&typeInput.value==='annual_leave';$('#substitute-label').classList.toggle('hidden',!active);subInput.required=false;subInput.innerHTML='<option value="">بدون جانشین</option>';
+    if(!active||!startInput.value){$('#substitute-help').textContent='برای مشاهده جانشین‌های مجاز، تاریخ شروع را تعیین کنید.';return;}
+    const from=startInput.value,to=endInput.value||from;$('#substitute-help').textContent='در حال بررسی ظرفیت جانشین‌ها…';
+    try{const {items}=await request('/api/substitutes?'+new URLSearchParams({from,to}));if(index!==subLoad)return;
+      for(const person of items){const opt=document.createElement('option');opt.value=person.id;opt.textContent=person.name+(person.available?'':' (در این بازه در دسترس نیست)');opt.disabled=!person.available;subInput.append(opt);}
+      $('#substitute-help').textContent=items.length?'در مناطق دارای الزام جانشین، انتخاب جانشین در مرخصی استحقاقی روزانه اجباری است.':'هنوز جانشین واجد شرایطی تعریف نشده است. مدیر شرکت می‌تواند از تنظیمات، جانشین معرفی کند.';
+    }catch(err){if(index===subLoad)$('#substitute-help').textContent=err.message;}}
+  unitInput.onchange=()=>{const daily=unitInput.value==='daily';endInput.disabled=!daily;if(!daily)endInput.value='';minutesInput.value=daily?'480':'120';minutesInput.closest('label').firstChild.textContent=daily?'مدت هر روز به دقیقه':'مدت به دقیقه';refreshSubstitutes();};
+  typeInput.onchange=refreshSubstitutes;startInput.onchange=refreshSubstitutes;endInput.onchange=refreshSubstitutes;
   unitInput.onchange();
-  $('#request-form').onsubmit=guard(async e=>{const b=formData(e.target);b.minutes=Number(b.minutes);await request('/api/requests','POST',b);toast('درخواست ثبت شد');navigate('requests');});
+  $('#request-form').onsubmit=guard(async e=>{const b=formData(e.target);b.minutes=Number(b.minutes);if(b.substitute_user_id)b.substitute_user_id=Number(b.substitute_user_id);else delete b.substitute_user_id;await request('/api/requests','POST',b);toast('درخواست ثبت شد');navigate('requests');});
+  document.querySelectorAll('.table tbody tr').forEach((row,i)=>{if(r.items[i]?.substitute_name){const detail=document.createElement('small');detail.className='muted';detail.textContent=' · جانشین: '+r.items[i].substitute_name;row.cells[1]?.append(detail);}});
   document.querySelectorAll('button.decision').forEach(button=>button.onclick=guard(async()=>{await request('/api/requests/'+button.dataset.id+'/decision','POST',{status:button.dataset.status});toast('وضعیت درخواست ثبت شد');navigate('requests');}));
 }
 
@@ -196,6 +207,22 @@ async function settings(){const s=await request('/api/settings');setContent(`<di
   const holidays=await request('/api/holidays');
   $('#content').insertAdjacentHTML('beforeend',`<div class="section-head"><h2>تعطیلات اختصاصی شرکت</h2></div><div class="note">تعطیلات رسمی از سرویس مستقل تقویم ایران به‌صورت برخط دریافت و روی سرور ذخیره می‌شوند؛ هنگام قطعی از نسخه ذخیره‌شده استفاده می‌شود. تعطیلات دستی این بخش فقط برای شرکت شما هستند.</div><form id="holiday-form" class="card stack" style="margin-top:16px"><div class="form-grid">${field('تاریخ (میلادی)','work_date','date')}${field('عنوان تعطیلی','title')}</div><button class="primary">ذخیره تعطیلی</button></form>${card(`<h3>تعطیلات ثبت‌شده</h3><div class="table-wrap"><table class="table"><thead><tr><th>تاریخ</th><th>عنوان</th></tr></thead><tbody>${holidays.items.map(h=>`<tr><td>${esc(h.work_date)}</td><td>${esc(h.title)}</td></tr>`).join('')||'<tr><td colspan="2">تعطیلی اختصاصی ثبت نشده است.</td></tr>'}</tbody></table></div>`)}`);
   $('#holiday-form').onsubmit=guard(async e=>{await request('/api/holidays','POST',formData(e.target));toast('تعطیلی ذخیره شد');await settings();});
+  if(state.user.role==='owner')await zoneManagement();
+}
+
+async function zoneManagement(){
+  const [{items:zones},{items:people}]=await Promise.all([request('/api/zones'),request('/api/users')]);
+  $('#content').insertAdjacentHTML('beforeend',`<div class="section-head"><h2>مناطق کاری و جانشینی مرخصی</h2><span class="badge">${fa(zones.length)} منطقه</span></div>
+    <div class="note">این تنظیمات مستقل از شرکت‌های دیگرند. الزام جانشین تنها برای مرخصی استحقاقی روزانه کارکنان هر منطقه فعال می‌شود. جانشین در بازه مرخصی، شیفت نیروی غایب را پوشش می‌دهد.</div>
+    <form id="zone-create" class="card stack" style="margin-top:16px"><h3>تعریف منطقه جدید</h3><div class="form-grid"><label>نام منطقه<input name="name" maxlength="120" required placeholder="مانند دفتر مرکزی"></label><label>سیاست مرخصی<select name="requires_substitute"><option value="0">بدون الزام جانشین</option><option value="1">جانشین الزامی برای مرخصی روزانه</option></select></label></div><button class="primary">افزودن منطقه</button></form>
+    ${card(`<h3>سیاست مناطق</h3><div class="table-wrap"><table class="table"><thead><tr><th>نام منطقه</th><th>جانشین مرخصی</th><th>تغییر سیاست</th></tr></thead><tbody>${zones.map(z=>`<tr><td>${esc(z.name)}</td><td>${z.requires_substitute?'الزامی':'اختیاری'}</td><td><button class="ghost zone-toggle" type="button" data-id="${z.id}" data-next="${z.requires_substitute?0:1}">${z.requires_substitute?'لغو الزام':'فعال‌کردن الزام'}</button></td></tr>`).join('')||'<tr><td colspan="3">هنوز منطقه‌ای تعریف نشده است.</td></tr>'}</tbody></table></div>`)}
+    <form id="staff-zone" class="card stack"><h3>منطقه و مجوز جانشینی کارکنان</h3><div class="form-grid"><label>کارمند<select name="user_id">${people.filter(p=>p.active).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label><label>منطقه کاری<select name="zone_id"><option value="">بدون منطقه</option>${zones.map(z=>`<option value="${z.id}">${esc(z.name)}</option>`).join('')}</select></label></div><label><input name="can_be_substitute" type="checkbox" style="width:auto;min-height:auto"> این کارمند مجاز به جانشینی دیگران است</label><button class="primary">ذخیره تخصیص کارمند</button></form>`);
+  $('#zone-create').onsubmit=guard(async e=>{const b=formData(e.target);await request('/api/zones','POST',{name:b.name,requires_substitute:b.requires_substitute==='1'});toast('منطقه ایجاد شد');await settings();});
+  document.querySelectorAll('.zone-toggle').forEach(button=>button.onclick=guard(async()=>{button.disabled=true;await request('/api/zones/'+button.dataset.id,'PATCH',{requires_substitute:button.dataset.next==='1'});toast('سیاست منطقه ذخیره شد');await settings();}));
+  const staffForm=$('#staff-zone');
+  function selectStaff(){const selected=people.find(p=>String(p.id)===staffForm.elements.user_id.value);staffForm.elements.zone_id.value=selected?.zone_id??'';staffForm.elements.can_be_substitute.checked=!!selected?.can_be_substitute;}
+  staffForm.elements.user_id.onchange=selectStaff;selectStaff();
+  staffForm.onsubmit=guard(async e=>{const b=formData(e.target);await request('/api/users/'+b.user_id+'/zone','PATCH',{zone_id:b.zone_id===''?null:Number(b.zone_id),can_be_substitute:staffForm.elements.can_be_substitute.checked});toast('منطقه و مجوز جانشینی ذخیره شد');await settings();});
 }
 
 async function platformCompanies(){

@@ -19,6 +19,8 @@ for (const [name,slug] of [['شرکت الف','alpha'],['شرکت ب','beta']]) 
 db.prepare('INSERT INTO platform_admins(username,name,password_hash) VALUES(?,?,?)').run('root','مدیر مرکزی',passwordHash('platform-strong-pass-123'));
 db.prepare('INSERT INTO official_calendar_years(jalali_year,payload_json,fetched_at) VALUES(?,?,?)').run(1405,
   JSON.stringify({days:{'2026-03-21':{title:'نوروز',estimated:false},'2026-06-05':{title:'قیام ۱۵ خرداد',estimated:false}},estimated:false}),new Date().toISOString());
+db.prepare('INSERT INTO official_calendar_years(jalali_year,payload_json,fetched_at) VALUES(?,?,?)').run(1404,
+  JSON.stringify({days:{},estimated:false}),new Date().toISOString());
 db.close();
 const { createServer }=await import('../server/index.js');
 const server=createServer();
@@ -171,6 +173,43 @@ test('unpaid leave is tenant-isolated, approved in two stages and excluded from 
   assert.equal(report.unpaid_leave,480);assert.equal(report.leave,0);
   assert.equal(report.shortage,0);assert.equal(report.worked,0);
   assert.equal((await api('/api/leave-balance?year=1405',staff)).body.used_minutes,before);
+});
+
+test('zones require daily annual-leave substitute and reserve it per company and date',async()=>{
+  const zone=await api('/api/zones',a,'POST',{name:'مبادی ورودی',requires_substitute:true});
+  assert.equal(zone.status,201);
+  assert.equal((await api('/api/zones',b)).body.items.length,0);
+  assert.equal((await api('/api/zones/'+zone.body.id,b,'PATCH',{requires_substitute:false})).status,404);
+  const candidate={body:{id:4}}; // Existing company manager acts as the test substitute; active-user counts stay unchanged.
+  assert.equal((await api('/api/users/'+candidate.body.id+'/zone',a,'PATCH',{zone_id:zone.body.id,can_be_substitute:true})).status,200);
+  assert.equal((await api('/api/users/3/zone',a,'PATCH',{zone_id:zone.body.id,can_be_substitute:false})).status,200);
+  const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
+  const manager=(await api('/api/login',null,'POST',{company:'alpha',username:'middle',password:'strong-password-123'})).body.token;
+  const base={type:'annual_leave',unit:'daily',work_date:'2025-05-11',end_date:'2025-05-12',minutes:480};
+  assert.equal((await api('/api/requests',staff,'POST',base)).status,400);
+  assert.equal((await api('/api/requests',staff,'POST',{...base,substitute_user_id:2})).status,404);
+  const list=(await api('/api/substitutes?from=2025-05-11&to=2025-05-12',staff)).body.items;
+  assert.equal(list.find(x=>x.id===candidate.body.id).available,true);
+  const created=await api('/api/requests',staff,'POST',{...base,substitute_user_id:candidate.body.id});
+  assert.equal(created.status,201);
+  assert.equal((await api('/api/requests',staff,'POST',{...base,substitute_user_id:candidate.body.id})).status,409);
+  assert.equal((await api('/api/substitutes?from=2025-05-11&to=2025-05-12',staff)).body.items.find(x=>x.id===candidate.body.id).available,false);
+  assert.equal((await api('/api/requests/'+created.body.id+'/decision',manager,'POST',{status:'approved'})).status,200);
+  assert.equal((await api('/api/requests/'+created.body.id+'/decision',a,'POST',{status:'approved'})).status,200);
+  const stored=openDatabase(process.env.DB_PATH);
+  assert.equal(stored.prepare('SELECT substitute_user_id FROM substitute_assignments WHERE request_id=?').get(created.body.id).substitute_user_id,candidate.body.id);
+  stored.close();
+  const regular=await api('/api/shifts',a,'POST',{name:'شیفت مرخصی‌گیرنده',start_time:'08:00',end_time:'16:00',duty_minutes:480,daily_ot_cap:27});
+  const own=await api('/api/shifts',a,'POST',{name:'شیفت اصلی جانشین',start_time:'09:00',end_time:'15:00',duty_minutes:360,daily_ot_cap:27});
+  assert.equal(regular.status,201);assert.equal(own.status,201);
+  assert.equal((await api('/api/assignments',a,'POST',{user_id:3,shift_id:regular.body.id})).status,200);
+  assert.equal((await api('/api/assignments',a,'POST',{user_id:4,shift_id:own.body.id})).status,200);
+  const substituteReport=await api('/api/work-report?user_id=4&from=2025-05-10&to=2025-05-13',a);
+  assert.equal(substituteReport.status,200);
+  assert.equal(substituteReport.body.days.find(d=>d.day==='2025-05-11').expected,480);
+  assert.equal(substituteReport.body.days.find(d=>d.day==='2025-05-13').expected,360);
+  assert.equal((await api('/api/requests',staff)).body.items.find(x=>x.id===created.body.id).substitute_name,'مدیر میانی');
+  assert.equal((await api('/api/requests',b)).body.items.some(x=>x.id===created.body.id),false);
 });
 
 test('annual leave quota is company-specific, checked at final approval and employee-visible',async()=>{

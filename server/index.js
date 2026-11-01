@@ -43,6 +43,15 @@ async function body(req) {
 }
 const str = (v,max=120) => typeof v==='string' && v.trim().length>0 && v.trim().length<=max;
 const ownUser = (user,id) => db.prepare('SELECT id,name,role,active FROM users WHERE id=? AND company_id=?').get(id,user.company_id);
+function substituteAvailable(companyId,userId,from,to,exceptId=0){
+  const reserved=db.prepare(`SELECT 1 FROM personnel_requests WHERE company_id=? AND substitute_user_id=?
+    AND id<>? AND type='annual_leave' AND unit='daily' AND status IN ('pending','approved')
+    AND work_date<=? AND COALESCE(end_date,work_date)>=? LIMIT 1`).get(companyId,userId,exceptId,to,from);
+  const leave=db.prepare(`SELECT 1 FROM personnel_requests WHERE company_id=? AND user_id=?
+    AND id<>? AND status IN ('pending','approved') AND type IN ('annual_leave','sick_leave','unpaid_leave')
+    AND work_date<=? AND COALESCE(end_date,work_date)>=? LIMIT 1`).get(companyId,userId,exceptId,to,from);
+  return !reserved&&!leave;
+}
 const validDay = s => /^\d{4}-\d{2}-\d{2}$/.test(s||'') && !Number.isNaN(Date.parse(s)) && new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
 function annualLeaveBalance(companyId,userId,year,excludingId=0){
   const requests=db.prepare(`SELECT type,work_date,end_date,minutes FROM personnel_requests
@@ -66,16 +75,22 @@ function buildWorkReport(companyId,targetId,from,to,official) {
     for(const key of Object.keys(previous))previous[key]+=amounts[key];evidenceByDay.set(day,previous);}
   const assignment=db.prepare(`SELECT s.duty_minutes,s.daily_ot_cap,s.start_time,s.end_time,s.schedule_kind,s.schedule_json FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
     WHERE a.company_id=? AND a.user_id=?`).get(companyId,targetId);
+  const substitutedShifts=db.prepare(`SELECT sa.from_date,sa.to_date,s.duty_minutes,s.daily_ot_cap,s.start_time,s.end_time,s.schedule_kind,s.schedule_json
+    FROM substitute_assignments sa JOIN assignments a ON a.company_id=sa.company_id AND a.user_id=sa.absent_user_id
+    JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
+    WHERE sa.company_id=? AND sa.substitute_user_id=? AND sa.from_date<=? AND sa.to_date>=?
+    ORDER BY sa.id DESC`).all(companyId,targetId,to,from);
   const requests=db.prepare(`SELECT type,work_date,COALESCE(end_date,work_date) end_date,minutes FROM personnel_requests
     WHERE company_id=? AND user_id=? AND status='approved' AND work_date<=? AND COALESCE(end_date,work_date)>=?`).all(companyId,targetId,to,from);
   const manual=new Map(db.prepare('SELECT work_date,title FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(companyId,from,to).map(x=>[x.work_date,x.title]));
   const calendar=calendarDays(from,to,manual,official.days),byDate=new Map(calendar.map(x=>[x.date,x]));
   const days=[],cursor=new Date(from+'T12:00:00Z'),limit=new Date(to+'T12:00:00Z');
   while(cursor<=limit){const day=cursor.toISOString().slice(0,10),parts=sessions.get(day)||[];
-    const policy=assignment?JSON.parse(assignment.schedule_json||'{}'):{};
-    const metrics=attendanceMetrics(assignment,day,parts,policy);
+    const effectiveShift=substitutedShifts.find(x=>x.from_date<=day&&x.to_date>=day)||assignment;
+    const policy=effectiveShift?JSON.parse(effectiveShift.schedule_json||'{}'):{};
+    const metrics=attendanceMetrics(effectiveShift,day,parts,policy);
     const classification=byDate.get(day);
-    days.push({...dailyWork({day,...metrics,duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,hasShift:!!assignment,approved:requests.filter(r=>r.work_date<=day&&r.end_date>=day),holiday:classification.is_official_holiday||classification.is_manual_holiday}),
+    days.push({...dailyWork({day,...metrics,duty:dutyForDay(effectiveShift,day),overtimeCap:effectiveShift?.daily_ot_cap??27,hasShift:!!effectiveShift,approved:requests.filter(r=>r.work_date<=day&&r.end_date>=day),holiday:classification.is_official_holiday||classification.is_manual_holiday}),
       ...(evidenceByDay.get(day)||{gps_off_minutes:0,internet_off_minutes:0}),
       jalali:classification.jalali,is_official_holiday:classification.is_official_holiday,is_manual_holiday:classification.is_manual_holiday,
       holiday_title:classification.title,holiday_source:classification.source});cursor.setUTCDate(cursor.getUTCDate()+1);}
@@ -175,7 +190,7 @@ async function api(req,res,url) {
     return json(res,200,{total,present,absent:total-present,company:user.company_name,period:{from:start,to:end},arrivals});
   }
   if (path==='/api/users' && method==='GET') {
-    admin(user);return json(res,200,{items:db.prepare('SELECT id,name,username,role,active FROM users WHERE company_id=? ORDER BY id DESC').all(user.company_id)});
+    admin(user);return json(res,200,{items:db.prepare('SELECT id,name,username,role,active,zone_id,can_be_substitute FROM users WHERE company_id=? ORDER BY id DESC').all(user.company_id)});
   }
   if (path==='/api/users' && method==='POST') {
     owner(user);const b=await body(req);
@@ -189,6 +204,33 @@ async function api(req,res,url) {
       db.exec('COMMIT');
     }catch(e){db.exec('ROLLBACK');throw e;}
     audit(user,'user.create','user',Number(result.lastInsertRowid));return json(res,201,{id:Number(result.lastInsertRowid)});
+  }
+  if(path==='/api/zones'&&method==='GET'){
+    admin(user);return json(res,200,{items:db.prepare('SELECT id,name,requires_substitute FROM zones WHERE company_id=? ORDER BY name').all(user.company_id)});
+  }
+  if(path==='/api/zones'&&method==='POST'){
+    owner(user);const b=await body(req);
+    if(!str(b.name,100)||typeof b.requires_substitute!=='boolean')throw fail(400,'اطلاعات منطقه نامعتبر است');
+    if(db.prepare('SELECT 1 FROM zones WHERE company_id=? AND name=?').get(user.company_id,b.name.trim()))throw fail(409,'منطقه تکراری است');
+    const result=db.prepare('INSERT INTO zones(company_id,name,requires_substitute) VALUES(?,?,?)').run(user.company_id,b.name.trim(),Number(b.requires_substitute));
+    audit(user,'zone.create','zone',Number(result.lastInsertRowid));return json(res,201,{id:Number(result.lastInsertRowid)});
+  }
+  const zoneUpdate=/^\/api\/zones\/(\d+)$/.exec(path);
+  if(zoneUpdate&&method==='PATCH'){
+    owner(user);const b=await body(req),id=Number(zoneUpdate[1]);
+    if(typeof b.requires_substitute!=='boolean')throw fail(400,'سیاست جانشین نامعتبر است');
+    const result=db.prepare('UPDATE zones SET requires_substitute=? WHERE id=? AND company_id=?').run(Number(b.requires_substitute),id,user.company_id);
+    if(!result.changes)throw fail(404,'منطقه یافت نشد');
+    audit(user,'zone.policy','zone',id);return json(res,200,{ok:true});
+  }
+  const userZone=/^\/api\/users\/(\d+)\/zone$/.exec(path);
+  if(userZone&&method==='PATCH'){
+    owner(user);const b=await body(req),id=Number(userZone[1]);
+    if(!ownUser(user,id))throw fail(404,'کارمند یافت نشد');
+    if(b.zone_id!==null&&(!Number.isInteger(b.zone_id)||!db.prepare('SELECT 1 FROM zones WHERE id=? AND company_id=?').get(b.zone_id,user.company_id)))throw fail(404,'منطقه متعلق به شرکت نیست');
+    if(typeof b.can_be_substitute!=='boolean')throw fail(400,'مجوز جانشینی نامعتبر است');
+    db.prepare('UPDATE users SET zone_id=?,can_be_substitute=? WHERE id=? AND company_id=?').run(b.zone_id,Number(b.can_be_substitute),id,user.company_id);
+    audit(user,'user.zone','user',id);return json(res,200,{ok:true});
   }
   if (path==='/api/shifts' && method==='GET') {feature(user,'shifts');return json(res,200,{items:db.prepare('SELECT id,name,start_time,end_time,duty_minutes,daily_ot_cap,schedule_kind,schedule_json FROM shifts WHERE company_id=?').all(user.company_id)});}
   if (path==='/api/shifts' && method==='POST') {
@@ -227,13 +269,22 @@ async function api(req,res,url) {
   }
   if(path==='/api/requests' && method==='GET') {
     const mine=url.searchParams.get('scope')==='mine'||user.role==='employee';
-    const items=mine?db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.end_date,r.unit,r.minutes,r.description,r.status,r.created_at
+    const items=mine?db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.end_date,r.unit,r.minutes,r.description,r.status,r.created_at,r.substitute_user_id,su.name substitute_name
       FROM personnel_requests r JOIN users u ON u.id=r.user_id AND u.company_id=r.company_id
+      LEFT JOIN users su ON su.id=r.substitute_user_id AND su.company_id=r.company_id
       WHERE r.company_id=? AND r.user_id=? ORDER BY r.id DESC LIMIT 200`).all(user.company_id,user.id)
-    :db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.end_date,r.unit,r.minutes,r.description,r.status,r.created_at
+    :db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.end_date,r.unit,r.minutes,r.description,r.status,r.created_at,r.substitute_user_id,su.name substitute_name
       FROM personnel_requests r JOIN users u ON u.id=r.user_id AND u.company_id=r.company_id
+      LEFT JOIN users su ON su.id=r.substitute_user_id AND su.company_id=r.company_id
       WHERE r.company_id=? ORDER BY r.id DESC LIMIT 200`).all(user.company_id);
     for(const item of items){item.next_stage=db.prepare('SELECT COUNT(*) n FROM request_decisions WHERE company_id=? AND request_id=?').get(user.company_id,item.id).n+1;item.total_steps=settings(user.company_id).approval_steps;}
+    return json(res,200,{items});
+  }
+  if(path==='/api/substitutes'&&method==='GET'){
+    const from=url.searchParams.get('from'),to=url.searchParams.get('to');
+    if(!validDay(from)||!validDay(to)||to<from||Date.parse(to)-Date.parse(from)>30*86400000)throw fail(400,'بازه جانشینی نامعتبر است');
+    const items=db.prepare(`SELECT id,name,zone_id FROM users WHERE company_id=? AND active=1 AND can_be_substitute=1 AND id<>? ORDER BY name`)
+      .all(user.company_id,user.id).map(s=>({...s,available:substituteAvailable(user.company_id,s.id,from,to)}));
     return json(res,200,{items});
   }
   if(path==='/api/leave-balance' && method==='GET'){
@@ -246,8 +297,22 @@ async function api(req,res,url) {
     const b=await body(req);
     const end=b.end_date||b.work_date,unit=b.unit||'hourly';
     if(!['annual_leave','sick_leave','unpaid_leave','mission'].includes(b.type)||!validDay(b.work_date)||!validDay(end)||end<b.work_date||Date.parse(end)-Date.parse(b.work_date)>30*86400000||!['hourly','daily'].includes(unit)||(unit==='hourly'&&end!==b.work_date)||!Number.isInteger(b.minutes)||b.minutes<1||b.minutes>1440||(b.description!==undefined&&typeof b.description!=='string')||(b.description||'').length>500) throw fail(400,'اطلاعات درخواست نامعتبر است');
-    const result=db.prepare(`INSERT INTO personnel_requests(company_id,user_id,type,work_date,end_date,unit,minutes,description)
-      VALUES(?,?,?,?,?,?,?,?)`).run(user.company_id,user.id,b.type,b.work_date,end,unit,b.minutes,b.description||'');
+    const eligible=b.type==='annual_leave'&&unit==='daily',subId=b.substitute_user_id??null;
+    if(subId!==null&&(!eligible||!Number.isInteger(subId)||subId===user.id))throw fail(400,'جانشین فقط برای مرخصی استحقاقی روزانه مجاز است');
+    db.exec('BEGIN IMMEDIATE');let result;
+    try{
+      const requester=db.prepare(`SELECT z.requires_substitute FROM users u LEFT JOIN zones z ON z.id=u.zone_id AND z.company_id=u.company_id
+        WHERE u.id=? AND u.company_id=?`).get(user.id,user.company_id);
+      const substituteSelf=db.prepare(`SELECT 1 FROM substitute_assignments WHERE company_id=? AND substitute_user_id=? AND from_date<=? AND to_date>=? LIMIT 1`)
+        .get(user.company_id,user.id,end,b.work_date);
+      if(eligible&&requester?.requires_substitute&&!subId&&!substituteSelf)throw fail(400,'برای این منطقه انتخاب نیروی جایگزین الزامی است');
+      if(subId!==null){const sub=db.prepare('SELECT active,can_be_substitute FROM users WHERE id=? AND company_id=?').get(subId,user.company_id);
+        if(!sub?.active||!sub.can_be_substitute)throw fail(404,'نیروی جایگزین مجاز در شرکت وجود ندارد');
+        if(!substituteAvailable(user.company_id,subId,b.work_date,end))throw fail(409,'نیروی جایگزین در این بازه در دسترس نیست');}
+      result=db.prepare(`INSERT INTO personnel_requests(company_id,user_id,type,work_date,end_date,unit,minutes,description,substitute_user_id)
+        VALUES(?,?,?,?,?,?,?,?,?)`).run(user.company_id,user.id,b.type,b.work_date,end,unit,b.minutes,b.description||'',subId);
+      db.exec('COMMIT');
+    }catch(error){db.exec('ROLLBACK');throw error;}
     const id=Number(result.lastInsertRowid);audit(user,'request.create','personnel_request',id);return json(res,201,{id,status:'pending'});
   }
   const decision=/^\/api\/requests\/(\d+)\/decision$/.exec(path);
@@ -256,7 +321,7 @@ async function api(req,res,url) {
     if(!['approved','rejected'].includes(b.status)) throw fail(400,'وضعیت نامعتبر است');
     db.exec('BEGIN IMMEDIATE');
     try {
-      const target=db.prepare('SELECT id,user_id,status,type,work_date,end_date,minutes FROM personnel_requests WHERE id=? AND company_id=?').get(id,user.company_id);
+      const target=db.prepare('SELECT id,user_id,status,type,work_date,end_date,minutes,unit,substitute_user_id FROM personnel_requests WHERE id=? AND company_id=?').get(id,user.company_id);
       if(!target)throw fail(404,'درخواست شرکت یافت نشد');
       if(target.user_id===user.id)throw fail(403,'تأیید درخواست خود مجاز نیست');
       if(target.status!=='pending')throw fail(409,'این درخواست قبلاً بررسی شده است');
@@ -272,6 +337,13 @@ async function api(req,res,url) {
         const next=annualLeaveByYear([target]);
         for(const [year,minutes] of next){const balance=annualLeaveBalance(user.company_id,target.user_id,year,id);
           if(minutes>balance.remaining_minutes)throw fail(409,`مانده مرخصی استحقاقی سال ${year} کافی نیست`);}
+      }
+      if(b.status==='approved'&&step===totalSteps&&target.type==='annual_leave'&&target.unit==='daily'&&target.substitute_user_id){
+        const sub=db.prepare('SELECT active,can_be_substitute FROM users WHERE company_id=? AND id=?').get(user.company_id,target.substitute_user_id);
+        if(!sub?.active||!sub.can_be_substitute||!substituteAvailable(user.company_id,target.substitute_user_id,target.work_date,target.end_date||target.work_date,id))
+          throw fail(409,'جانشین دیگر در دسترس نیست');
+        db.prepare(`INSERT INTO substitute_assignments(company_id,request_id,substitute_user_id,absent_user_id,from_date,to_date)
+          VALUES(?,?,?,?,?,?)`).run(user.company_id,id,target.substitute_user_id,target.user_id,target.work_date,target.end_date||target.work_date);
       }
       db.prepare('INSERT INTO request_decisions(company_id,request_id,stage,actor_user_id,outcome) VALUES(?,?,?,?,?)').run(user.company_id,id,step,user.id,b.status);
       const finalStatus=b.status==='rejected'?'rejected':step===totalSteps?'approved':'pending';

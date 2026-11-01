@@ -25,6 +25,11 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       active INTEGER NOT NULL DEFAULT 1, UNIQUE(company_id, username),
       UNIQUE(company_id, id)
     );
+    CREATE TABLE IF NOT EXISTS zones (
+      id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL REFERENCES companies(id),
+      name TEXT NOT NULL,requires_substitute INTEGER NOT NULL DEFAULT 0 CHECK(requires_substitute IN (0,1)),
+      UNIQUE(company_id,id),UNIQUE(company_id,name)
+    );
     CREATE TABLE IF NOT EXISTS sessions (
       token_hash TEXT PRIMARY KEY, company_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL, expires_at INTEGER NOT NULL,
@@ -133,6 +138,14 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       FOREIGN KEY(company_id,actor_user_id) REFERENCES users(company_id,id)
     );
     CREATE UNIQUE INDEX IF NOT EXISTS request_one_decision_per_stage ON request_decisions(company_id,request_id,stage);
+    CREATE TABLE IF NOT EXISTS substitute_assignments (
+      id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,request_id INTEGER NOT NULL UNIQUE,
+      substitute_user_id INTEGER NOT NULL,absent_user_id INTEGER NOT NULL,
+      from_date TEXT NOT NULL,to_date TEXT NOT NULL,
+      FOREIGN KEY(company_id,substitute_user_id) REFERENCES users(company_id,id),
+      FOREIGN KEY(company_id,absent_user_id) REFERENCES users(company_id,id)
+    );
+    CREATE INDEX IF NOT EXISTS substitute_employee_dates ON substitute_assignments(company_id,substitute_user_id,from_date,to_date);
     CREATE TABLE IF NOT EXISTS company_holidays (
       company_id INTEGER NOT NULL REFERENCES companies(id), work_date TEXT NOT NULL,
       title TEXT NOT NULL, PRIMARY KEY(company_id,work_date)
@@ -174,6 +187,9 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
   const companyColumns=db.prepare('PRAGMA table_info(companies)').all().map(x=>x.name);
   if(!companyColumns.includes('subscription_end'))db.exec('ALTER TABLE companies ADD COLUMN subscription_end TEXT');
   if(!companyColumns.includes('max_personnel'))db.exec('ALTER TABLE companies ADD COLUMN max_personnel INTEGER CHECK(max_personnel IS NULL OR max_personnel>=1)');
+  const userColumns=db.prepare('PRAGMA table_info(users)').all().map(x=>x.name);
+  if(!userColumns.includes('zone_id'))db.exec('ALTER TABLE users ADD COLUMN zone_id INTEGER');
+  if(!userColumns.includes('can_be_substitute'))db.exec('ALTER TABLE users ADD COLUMN can_be_substitute INTEGER NOT NULL DEFAULT 0 CHECK(can_be_substitute IN (0,1))');
   const archiveSql=db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='work_month_archives'").get()?.sql||'';
   if(archiveSql.includes('CHECK(length(month)=7)')){
     db.exec(`BEGIN IMMEDIATE;
@@ -201,6 +217,7 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
   const requestColumns=db.prepare('PRAGMA table_info(personnel_requests)').all().map(x=>x.name);
   if(!requestColumns.includes('end_date'))db.exec('ALTER TABLE personnel_requests ADD COLUMN end_date TEXT');
   if(!requestColumns.includes('unit'))db.exec("ALTER TABLE personnel_requests ADD COLUMN unit TEXT NOT NULL DEFAULT 'hourly' CHECK(unit IN ('hourly','daily'))");
+  if(!requestColumns.includes('substitute_user_id'))db.exec('ALTER TABLE personnel_requests ADD COLUMN substitute_user_id INTEGER');
   const requestSql=db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='personnel_requests'").get()?.sql||'';
   if(!requestSql.includes("'unpaid_leave'")){
     // Rebuild SQLite CHECK in one transaction; preserve IDs, approvals and all older data.
@@ -212,12 +229,12 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
         description TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
         decided_by INTEGER, decided_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        end_date TEXT,unit TEXT NOT NULL DEFAULT 'hourly' CHECK(unit IN ('hourly','daily')),
+        end_date TEXT,unit TEXT NOT NULL DEFAULT 'hourly' CHECK(unit IN ('hourly','daily')),substitute_user_id INTEGER,
         FOREIGN KEY(company_id,user_id) REFERENCES users(company_id,id),
         FOREIGN KEY(company_id,decided_by) REFERENCES users(company_id,id)
       );
-      INSERT INTO personnel_requests_migrated(id,company_id,user_id,type,work_date,minutes,description,status,decided_by,decided_at,created_at,end_date,unit)
-        SELECT id,company_id,user_id,type,work_date,minutes,description,status,decided_by,decided_at,created_at,end_date,unit FROM personnel_requests;
+      INSERT INTO personnel_requests_migrated(id,company_id,user_id,type,work_date,minutes,description,status,decided_by,decided_at,created_at,end_date,unit,substitute_user_id)
+        SELECT id,company_id,user_id,type,work_date,minutes,description,status,decided_by,decided_at,created_at,end_date,unit,substitute_user_id FROM personnel_requests;
       DROP TABLE personnel_requests;
       ALTER TABLE personnel_requests_migrated RENAME TO personnel_requests;
       CREATE INDEX personnel_requests_company_date ON personnel_requests(company_id,work_date,status);
