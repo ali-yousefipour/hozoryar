@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './db.js';
-import { issueSession, resolveSession, verifyPassword, revokeSession, passwordHash } from './auth.js';
+import { issueSession, resolveSession, verifyPassword, revokeSession, passwordHash, issuePlatformSession, resolvePlatformSession, revokePlatformSession } from './auth.js';
 import { attendanceMetrics, dailyWork, dutyForDay, localInstant, sessionsByEntryDate, sumWork, tehranDate } from './work.js';
-import { calendarDays } from './calendar.js';
+import { calendarDays, jalaliMonthBounds } from './calendar.js';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
 const logo = resolve(fileURLToPath(new URL('../branding/hozoryar-logo.png', import.meta.url)));
@@ -56,10 +56,15 @@ function buildWorkReport(companyId,targetId,from,to) {
     days.push(dailyWork({day,...metrics,duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,hasShift:!!assignment,approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
   return {user_id:targetId,from,to,days,totals:sumWork(days),authoritative:false,engine:'hozoryar-work-v3',reference:'khatyar/php/lib/ShiftCalc.php',note:'محاسبه شیفت و شب‌کاری بر مبنای تاریخ ورود و پنجره‌های شیفت انجام می‌شود. تقویم رسمی و سیاست‌های پیشرفته سازمانی هنوز تطبیق کامل نشده‌اند؛ برای حقوق قطعی استفاده نشود.'};
 }
-function monthBounds(month) {
-  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month||''))throw fail(400,'ماه میلادی نامعتبر است');
-  const [year,number]=month.split('-').map(Number);
-  const from=month+'-01',to=new Date(Date.UTC(year,number,0)).toISOString().slice(0,10);
+function monthBounds(key) {
+  const jalali=/^j-(1[34]\d{2}-(?:0[1-9]|1[0-2]))$/.exec(key||'');
+  let from,to;
+  if(jalali){const bounds=jalaliMonthBounds(jalali[1]);if(!bounds)throw fail(400,'ماه شمسی نامعتبر است');({from,to}=bounds);}
+  else{
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(key||''))throw fail(400,'ماه نامعتبر است');
+    const [year,number]=key.split('-').map(Number);
+    from=key+'-01';to=new Date(Date.UTC(year,number,0)).toISOString().slice(0,10);
+  }
   if(to>=tehranDate(new Date()))throw fail(409,'بایگانی تنها برای ماه میلادی سپری‌شده مجاز است');
   return {from,to};
 }
@@ -67,6 +72,47 @@ function monthBounds(month) {
 async function api(req,res,url) {
   const method=req.method,path=url.pathname;
   if (path==='/api/health' && method==='GET') return json(res,200,{ok:true,service:'hozoryar'});
+  if(path==='/api/platform/login' && method==='POST') {
+    const key=checkLoginRate(req),b=await body(req);
+    if(!str(b.username,60)||!str(b.password,200))throw fail(400,'اطلاعات ورود کامل نیست');
+    const administrator=db.prepare('SELECT * FROM platform_admins WHERE username=? AND active=1').get(b.username);
+    if(!administrator||!verifyPassword(b.password,administrator.password_hash))throw fail(401,'اطلاعات ورود صحیح نیست');
+    loginAttempts.delete(key);
+    return json(res,200,{...issuePlatformSession(db,administrator),user:{id:administrator.id,name:administrator.name,role:'platform_admin'}});
+  }
+  if(path.startsWith('/api/platform/')) {
+    const platform=resolvePlatformSession(db,req.headers.authorization);
+    if(!platform)throw fail(401,'ورود مدیر کل سامانه لازم است');
+    if(path==='/api/platform/me'&&method==='GET')return json(res,200,{user:{...platform,role:'platform_admin'}});
+    if(path==='/api/platform/logout'&&method==='POST'){
+      revokePlatformSession(db,(req.headers.authorization||'').replace(/^Bearer /,''));return json(res,200,{ok:true});
+    }
+    if(path==='/api/platform/companies'&&method==='GET'){
+      const items=db.prepare(`SELECT c.id,c.name,c.slug,c.active,c.subscription_end,c.max_personnel,
+        (SELECT COUNT(*) FROM users u WHERE u.company_id=c.id AND u.active=1) personnel_count
+        FROM companies c ORDER BY c.id`).all();
+      return json(res,200,{items});
+    }
+    const match=/^\/api\/platform\/companies\/(\d+)\/subscription$/.exec(path);
+    if(match&&method==='PATCH'){
+      const companyId=Number(match[1]),b=await body(req);
+      if(!Object.keys(b).length||Object.keys(b).some(k=>!['subscription_end','max_personnel'].includes(k)))throw fail(400,'تنظیمات نامعتبر است');
+      if(b.subscription_end!==undefined&&b.subscription_end!==null&&!validDay(b.subscription_end))throw fail(400,'تاریخ پایان اشتراک نامعتبر است');
+      if(b.max_personnel!==undefined&&b.max_personnel!==null&&(!Number.isInteger(b.max_personnel)||b.max_personnel<1||b.max_personnel>1000000))throw fail(400,'سقف پرسنل نامعتبر است');
+      db.exec('BEGIN IMMEDIATE');
+      try{
+        const company=db.prepare('SELECT * FROM companies WHERE id=?').get(companyId);
+        if(!company)throw fail(404,'شرکت یافت نشد');
+        const count=db.prepare('SELECT COUNT(*) n FROM users WHERE company_id=? AND active=1').get(companyId).n;
+        const cap=b.max_personnel===undefined?company.max_personnel:b.max_personnel;
+        if(cap!==null&&cap<count)throw fail(409,`سقف از تعداد ${count} کاربر فعال کمتر است`);
+        db.prepare('UPDATE companies SET subscription_end=?,max_personnel=? WHERE id=?')
+          .run(b.subscription_end===undefined?company.subscription_end:b.subscription_end,cap,companyId);
+        db.exec('COMMIT');return json(res,200,{ok:true,personnel_count:count});
+      }catch(e){db.exec('ROLLBACK');throw e;}
+    }
+    throw fail(404,'مسیر مدیریت مرکزی یافت نشد');
+  }
   if (path==='/api/login' && method==='POST') {
     const loginIp=checkLoginRate(req);
     const b=await body(req);
@@ -82,7 +128,10 @@ async function api(req,res,url) {
   const user=resolveSession(db,req.headers.authorization);
   if (!user) throw fail(401,'ابتدا وارد حساب شوید');
   if (path==='/api/logout' && method==='POST') {revokeSession(db,token);return json(res,200,{ok:true});}
-  if (path==='/api/me' && method==='GET') return json(res,200,{user,features:features(user.company_id)});
+  const company=db.prepare('SELECT subscription_end,max_personnel FROM companies WHERE id=?').get(user.company_id);
+  const expired=company.subscription_end!==null&&company.subscription_end<tehranDate(new Date());
+  if (path==='/api/me' && method==='GET') return json(res,200,{user,features:features(user.company_id),subscription:{...company,expired}});
+  if(method!=='GET'&&expired)throw fail(402,'اشتراک شرکت پایان یافته است؛ اطلاعات قابل مشاهده هستند اما عملیات جدید غیرفعال شده است');
   if (path==='/api/dashboard' && method==='GET') {
     admin(user);
     const cid=user.company_id;
@@ -97,7 +146,14 @@ async function api(req,res,url) {
   if (path==='/api/users' && method==='POST') {
     owner(user);const b=await body(req);
     if (!str(b.name)||!str(b.username,60)||!str(b.password,200)||b.password.length<12||!['manager','employee'].includes(b.role)) throw fail(400,'اطلاعات کارمند نامعتبر است');
-    const result=db.prepare('INSERT INTO users(company_id,name,username,password_hash,role) VALUES(?,?,?,?,?)').run(user.company_id,b.name,b.username,passwordHash(b.password),b.role);
+    db.exec('BEGIN IMMEDIATE');let result;
+    try{
+      const cap=db.prepare('SELECT max_personnel FROM companies WHERE id=?').get(user.company_id).max_personnel;
+      const count=db.prepare('SELECT COUNT(*) n FROM users WHERE company_id=? AND active=1').get(user.company_id).n;
+      if(cap!==null&&count>=cap)throw fail(409,'ظرفیت پرسنل شرکت تکمیل شده است؛ با مدیر سامانه تماس بگیرید');
+      result=db.prepare('INSERT INTO users(company_id,name,username,password_hash,role) VALUES(?,?,?,?,?)').run(user.company_id,b.name,b.username,passwordHash(b.password),b.role);
+      db.exec('COMMIT');
+    }catch(e){db.exec('ROLLBACK');throw e;}
     audit(user,'user.create','user',Number(result.lastInsertRowid));return json(res,201,{id:Number(result.lastInsertRowid)});
   }
   if (path==='/api/shifts' && method==='GET') {feature(user,'shifts');return json(res,200,{items:db.prepare('SELECT id,name,start_time,end_time,duty_minutes,daily_ot_cap,schedule_kind,schedule_json FROM shifts WHERE company_id=?').all(user.company_id)});}
@@ -189,9 +245,9 @@ async function api(req,res,url) {
     const items=db.prepare('SELECT month,created_at,created_by FROM work_month_archives WHERE company_id=? ORDER BY month DESC LIMIT 36').all(user.company_id);
     return json(res,200,{items});
   }
-  const archiveMatch=/^\/api\/work-months\/(\d{4}-\d{2})$/.exec(path);
+  const archiveMatch=/^\/api\/work-months\/(j-)?(\d{4}-\d{2})$/.exec(path);
   if(archiveMatch && method==='GET') {
-    admin(user);const month=archiveMatch[1];monthBounds(month);
+    admin(user);const month=archiveMatch[0].split('/').at(-1);monthBounds(month);
     const row=db.prepare('SELECT snapshot_json,created_at,created_by FROM work_month_archives WHERE company_id=? AND month=?').get(user.company_id,month);
     if(!row)throw fail(404,'بایگانی این ماه وجود ندارد');
     return json(res,200,{...JSON.parse(row.snapshot_json),created_at:row.created_at,created_by:row.created_by});
@@ -208,7 +264,7 @@ async function api(req,res,url) {
       if(open)throw fail(409,`${open} حضور بدون خروج وجود دارد؛ پیش از بایگانی بررسی کنید`);
       const people=db.prepare('SELECT id,name,role FROM users WHERE company_id=? AND active=1 ORDER BY id').all(user.company_id);
       const reports=people.map(person=>({...person,report:buildWorkReport(user.company_id,person.id,from,to)}));
-      const snapshot={month,from,to,status:'archived',authoritative:false,official_calendar_available:false,
+      const snapshot={month,calendar:month.startsWith('j-')?'jalali':'gregorian',from,to,status:'archived',authoritative:false,official_calendar_available:false,
         note:'این سند یک نسخه ثابت از محاسبات غیرقطعی است؛ تأیید حقوق و دستمزد محسوب نمی‌شود.',reports};
       db.prepare('INSERT INTO work_month_archives(company_id,month,snapshot_json,created_by) VALUES(?,?,?,?)')
         .run(user.company_id,month,JSON.stringify(snapshot),user.id);

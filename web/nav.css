@@ -1,2 +1,5 @@
 nav svg { width: 19px; height: 19px; flex-shrink: 0; }
 nav button[aria-current="page"] { font-weight: 800; }
+.login-option { display:flex; flex-direction:row; gap:10px; align-items:center; font-size:14px; }
+.login-option input { width:20px; height:20px; min-height:20px; accent-color:#6d28d9; }
+.company-plan .section-head { flex-wrap:wrap; }

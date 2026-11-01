@@ -10,6 +10,14 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       id INTEGER PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
       active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS platform_admins (
+      id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+      password_hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS platform_sessions (
+      token_hash TEXT PRIMARY KEY, admin_id INTEGER NOT NULL REFERENCES platform_admins(id),
+      expires_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL REFERENCES companies(id),
       name TEXT NOT NULL, username TEXT NOT NULL, password_hash TEXT NOT NULL,
@@ -101,11 +109,31 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY(company_id,month),
       FOREIGN KEY(company_id,created_by) REFERENCES users(company_id,id),
-      CHECK(length(month)=7)
+      CHECK(length(month) IN (7,9))
     );
   `);
   // Existing 0.1/0.2 databases are upgraded in place without touching tenant data.
   const settingColumns=db.prepare('PRAGMA table_info(company_settings)').all().map(x=>x.name);
+  const companyColumns=db.prepare('PRAGMA table_info(companies)').all().map(x=>x.name);
+  if(!companyColumns.includes('subscription_end'))db.exec('ALTER TABLE companies ADD COLUMN subscription_end TEXT');
+  if(!companyColumns.includes('max_personnel'))db.exec('ALTER TABLE companies ADD COLUMN max_personnel INTEGER CHECK(max_personnel IS NULL OR max_personnel>=1)');
+  const archiveSql=db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='work_month_archives'").get()?.sql||'';
+  if(archiveSql.includes('CHECK(length(month)=7)')){
+    db.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE work_month_archives_migrated (
+        company_id INTEGER NOT NULL REFERENCES companies(id), month TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL, created_by INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(company_id,month),
+        FOREIGN KEY(company_id,created_by) REFERENCES users(company_id,id),
+        CHECK(length(month) IN (7,9))
+      );
+      INSERT INTO work_month_archives_migrated(company_id,month,snapshot_json,created_by,created_at)
+        SELECT company_id,month,snapshot_json,created_by,created_at FROM work_month_archives;
+      DROP TABLE work_month_archives;
+      ALTER TABLE work_month_archives_migrated RENAME TO work_month_archives;
+      COMMIT;`);
+  }
   if(!settingColumns.includes('approval_steps'))db.exec('ALTER TABLE company_settings ADD COLUMN approval_steps INTEGER NOT NULL DEFAULT 1 CHECK(approval_steps IN (1,2))');
   const shiftColumns=db.prepare('PRAGMA table_info(shifts)').all().map(x=>x.name);
   if(!shiftColumns.includes('schedule_kind'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_kind TEXT NOT NULL DEFAULT 'fixed'");

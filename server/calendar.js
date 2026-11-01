@@ -6,6 +6,18 @@ export function jalaliDate(isoDay){
   const parts=Object.fromEntries(persian.formatToParts(new Date(isoDay+'T12:00:00Z')).map(p=>[p.type,p.value]));
   return `${parts.year.padStart(4,'0')}-${parts.month.padStart(2,'0')}-${parts.day.padStart(2,'0')}`;
 }
+export function jalaliMonthBounds(month){
+  if(!/^1[34]\d{2}-(0[1-9]|1[0-2])$/.test(month||''))return null;
+  const year=Number(month.slice(0,4));
+  const approximate=new Date(Date.UTC(year+621,2,18));
+  let from=null,to=null;
+  for(let i=0;i<375;i++){
+    const date=new Date(approximate.getTime()+i*86400000).toISOString().slice(0,10);
+    if(jalaliDate(date).slice(0,7)===month){from??=date;to=date;}
+    else if(from)break;
+  }
+  return from?{from,to}:null;
+}
 export function calendarDays(from,to,manualHolidays=new Map()) {
   const days=[],cursor=new Date(from+'T12:00:00Z'),last=new Date(to+'T12:00:00Z');
   while(cursor<=last){const date=cursor.toISOString().slice(0,10),manual=manualHolidays.get(date)||null;

@@ -16,6 +16,7 @@ for (const [name,slug] of [['شرکت الف','alpha'],['شرکت ب','beta']]) 
   insertUser.run(id,'مدیر '+name,'admin',passwordHash('strong-password-123'),'owner');
   db.prepare('INSERT INTO company_settings(company_id) VALUES(?)').run(id);
 }
+db.prepare('INSERT INTO platform_admins(username,name,password_hash) VALUES(?,?,?)').run('root','مدیر مرکزی',passwordHash('platform-strong-pass-123'));
 db.close();
 const { createServer }=await import('../server/index.js');
 const server=createServer();
@@ -158,4 +159,40 @@ test('monthly archive is owner-only, immutable, tenant-scoped and blocked by pen
   write.close();
   assert.equal((await api('/api/work-months/2026-10',a)).body.reports.find(x=>x.id===3).report.totals.worked,original);
   assert.equal((await api('/api/work-report?from=2026-10-20&to=2026-10-22',staff)).body.totals.worked,540);
+});
+
+test('Jalali monthly archives use exact Persian boundaries and separate keys',async()=>{
+  const archive=await api('/api/work-months/finalize',a,'POST',{month:'j-1405-07'});
+  assert.equal(archive.status,201);
+  const snapshot=(await api('/api/work-months/j-1405-07',a)).body;
+  assert.equal(snapshot.from,'2026-09-23');assert.equal(snapshot.to,'2026-10-22');
+  assert.equal(snapshot.calendar,'jalali');
+  assert.equal(snapshot.authoritative,false);
+  assert.equal((await api('/api/work-months/j-1405-07',b)).status,404);
+  assert.equal((await api('/api/work-months/finalize',a,'POST',{month:'j-1405-08'})).status,409);
+});
+
+test('platform administrator alone can configure per-company subscription and personnel quota',async()=>{
+  const login=await api('/api/platform/login',null,'POST',{username:'root',password:'platform-strong-pass-123'});
+  assert.equal(login.status,200);const platform=login.body.token;
+  assert.equal((await api('/api/platform/companies',a)).status,401);
+  assert.equal((await api('/api/platform/me',platform)).body.user.role,'platform_admin');
+  const companies=await api('/api/platform/companies',platform);
+  assert.equal(companies.body.items.length,2);
+  assert.equal((await api('/api/platform/companies/1/subscription',platform,'PATCH',{max_personnel:2})).status,409);
+  assert.equal((await api('/api/platform/companies/1/subscription',platform,'PATCH',{max_personnel:3})).status,200);
+  assert.equal((await api('/api/users',a,'POST',{name:'کاربر چهارم',username:'fourth',password:'strong-password-123',role:'employee'})).status,409);
+  assert.equal((await api('/api/platform/companies/1/subscription',platform,'PATCH',{max_personnel:4})).status,200);
+  assert.equal((await api('/api/users',a,'POST',{name:'کاربر چهارم',username:'fourth',password:'strong-password-123',role:'employee'})).status,201);
+  assert.equal((await api('/api/platform/companies/2/subscription',platform,'PATCH',{subscription_end:'2026-11-01'})).status,200);
+  assert.equal((await api('/api/me',b)).body.subscription.expired,false);
+  assert.equal((await api('/api/platform/companies/2/subscription',platform,'PATCH',{subscription_end:'2026-10-31',max_personnel:1})).status,200);
+  assert.equal((await api('/api/me',b)).body.subscription.expired,true);
+  assert.equal((await api('/api/users',b)).status,200);
+  assert.equal((await api('/api/users',b,'POST',{name:'ممنوع',username:'blocked',password:'strong-password-123',role:'employee'})).status,402);
+  assert.equal((await api('/api/platform/companies/2/subscription',a,'PATCH',{subscription_end:null})).status,401);
+  assert.equal((await api('/api/platform/companies/2/subscription',platform,'PATCH',{subscription_end:null})).status,200);
+  assert.equal((await api('/api/me',b)).body.subscription.expired,false);
+  assert.equal((await api('/api/platform/logout',platform,'POST')).status,200);
+  assert.equal((await api('/api/platform/companies',platform)).status,401);
 });
