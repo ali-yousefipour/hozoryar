@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/PersonnelApi.php';
+require_once __DIR__ . '/WorkCalc.php';
 
 final class AttendanceApi {
     private static function coords($lat,$lng,$accuracy): bool {
@@ -32,10 +33,11 @@ final class AttendanceApi {
         if(!in_array($action,['in','out'],true))respond(400,['error'=>'عملیات نامعتبر است']);
         $event=$b['event_id']??null;
         if($event!==null&&(!is_string($event)||!preg_match('/^[a-zA-Z0-9_-]{16,64}$/',$event)))respond(400,['error'=>'شناسه رویداد نامعتبر است']);
-        // No bypass: a company that requires a shift gate must wait until its PHP gate is ported.
         // Idempotent replay is allowed even if the policy has changed since the original event.
         $pdo=Db::pdo();$pdo->beginTransaction();
         try {
+            // Match archive/request lock order and serialize punches against finalization.
+            Db::one('SELECT id FROM companies WHERE id=? FOR UPDATE',[$cid]);
             Db::one('SELECT id FROM users WHERE company_id=? AND id=? FOR UPDATE',[$cid,$uid]);
             if($event!==null){
                 $prior=Db::one('SELECT action,attendance_id,recorded_at FROM attendance_events WHERE company_id=? AND user_id=? AND event_id=?',[$cid,$uid,$event]);
@@ -44,7 +46,13 @@ final class AttendanceApi {
                     $pdo->commit();respond(200,['id'=>(int)$prior['attendance_id'],'at'=>$prior['recorded_at'],'replayed'=>true]);
                 }
             }
-            if($settings['enforce_shift_window']){$pdo->rollBack();respond(501,['error'=>'کنترل پنجره شیفت در نسخه PHP هنوز تکمیل نشده است']);}
+            if($settings['enforce_shift_window']){
+                $shift=Db::one('SELECT s.* FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
+                    WHERE a.company_id=? AND a.user_id=?',[$cid,$uid]);
+                if(!WorkCalc::allowedShiftTraffic($shift,time(),$action)){
+                    $pdo->rollBack();respond(403,['error'=>'ثبت تردد خارج از بازه مجاز شیفت است']);
+                }
+            }
             $lat=$b['lat']??null;$lng=$b['lng']??null;$accuracy=$b['accuracy']??null;
             if($action==='in'&&$settings['require_location']&&!self::coords($lat,$lng,$accuracy)){
                 $pdo->rollBack();respond(400,['error'=>'موقعیت مکانی معتبر لازم است']);
