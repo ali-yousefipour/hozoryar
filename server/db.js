@@ -26,6 +26,7 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL REFERENCES companies(id),
       name TEXT NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL,
       duty_minutes INTEGER NOT NULL CHECK(duty_minutes BETWEEN 0 AND 1440),
+      daily_ot_cap INTEGER NOT NULL DEFAULT 27 CHECK(daily_ot_cap BETWEEN 0 AND 1440),
       schedule_kind TEXT NOT NULL DEFAULT 'fixed',
       schedule_json TEXT NOT NULL DEFAULT '{}',
       UNIQUE(company_id,id)
@@ -101,5 +102,6 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
   const shiftColumns=db.prepare('PRAGMA table_info(shifts)').all().map(x=>x.name);
   if(!shiftColumns.includes('schedule_kind'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_kind TEXT NOT NULL DEFAULT 'fixed'");
   if(!shiftColumns.includes('schedule_json'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_json TEXT NOT NULL DEFAULT '{}'");
+  if(!shiftColumns.includes('daily_ot_cap'))db.exec('ALTER TABLE shifts ADD COLUMN daily_ot_cap INTEGER NOT NULL DEFAULT 27 CHECK(daily_ot_cap BETWEEN 0 AND 1440)');
   return db;
 }

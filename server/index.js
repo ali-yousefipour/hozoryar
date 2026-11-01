@@ -4,7 +4,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './db.js';
 import { issueSession, resolveSession, verifyPassword, revokeSession, passwordHash } from './auth.js';
-import { dailyWork, dutyForDay, splitSessions, sumWork } from './work.js';
+import { dailyWork, dutyForDay, nightMinutes, splitSessionDetails, sumWork } from './work.js';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
 const logo = resolve(fileURLToPath(new URL('../branding/hozoryar-logo.png', import.meta.url)));
@@ -74,15 +74,16 @@ async function api(req,res,url) {
     const result=db.prepare('INSERT INTO users(company_id,name,username,password_hash,role) VALUES(?,?,?,?,?)').run(user.company_id,b.name,b.username,passwordHash(b.password),b.role);
     audit(user,'user.create','user',Number(result.lastInsertRowid));return json(res,201,{id:Number(result.lastInsertRowid)});
   }
-  if (path==='/api/shifts' && method==='GET') {feature(user,'shifts');return json(res,200,{items:db.prepare('SELECT id,name,start_time,end_time,duty_minutes,schedule_kind,schedule_json FROM shifts WHERE company_id=?').all(user.company_id)});}
+  if (path==='/api/shifts' && method==='GET') {feature(user,'shifts');return json(res,200,{items:db.prepare('SELECT id,name,start_time,end_time,duty_minutes,daily_ot_cap,schedule_kind,schedule_json FROM shifts WHERE company_id=?').all(user.company_id)});}
   if (path==='/api/shifts' && method==='POST') {
     admin(user);feature(user,'shifts');const b=await body(req);
     if(!str(b.name)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.start_time)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.end_time)||!Number.isInteger(b.duty_minutes)||b.duty_minutes<0||b.duty_minutes>1440) throw fail(400,'اطلاعات شیفت نامعتبر است');
+    const cap=b.daily_ot_cap??27;if(!Number.isInteger(cap)||cap<0||cap>1440)throw fail(400,'سقف اضافه‌کاری روزانه نامعتبر است');
     const kind=b.schedule_kind||'fixed',config=b.schedule||{};
     if(!['fixed','weekly','rotating','floating'].includes(kind))throw fail(400,'نوع شیفت نامعتبر است');
     if(kind==='weekly'&&(!Array.isArray(config.days)||config.days.some(x=>!Number.isInteger(x)||x<0||x>6)||new Set(config.days).size!==config.days.length))throw fail(400,'روزهای شیفت هفتگی نامعتبر است');
     if(kind==='rotating'&&(!Number.isInteger(config.work)||config.work<1||config.work>30||!Number.isInteger(config.rest)||config.rest<1||config.rest>30||!/^\d{4}-\d{2}-\d{2}$/.test(config.anchor||'')||Number.isNaN(Date.parse(config.anchor))))throw fail(400,'چرخه شیفت نامعتبر است');
-    const result=db.prepare('INSERT INTO shifts(company_id,name,start_time,end_time,duty_minutes,schedule_kind,schedule_json) VALUES(?,?,?,?,?,?,?)').run(user.company_id,b.name,b.start_time,b.end_time,b.duty_minutes,kind,JSON.stringify(config));
+    const result=db.prepare('INSERT INTO shifts(company_id,name,start_time,end_time,duty_minutes,daily_ot_cap,schedule_kind,schedule_json) VALUES(?,?,?,?,?,?,?,?)').run(user.company_id,b.name,b.start_time,b.end_time,b.duty_minutes,cap,kind,JSON.stringify(config));
     audit(user,'shift.create','shift',Number(result.lastInsertRowid));return json(res,201,{id:Number(result.lastInsertRowid)});
   }
   if (path==='/api/assignments' && method==='POST') {
@@ -151,15 +152,17 @@ async function api(req,res,url) {
     const rows=db.prepare(`SELECT checked_in_at,checked_out_at FROM attendance WHERE company_id=? AND user_id=?
       AND checked_in_at<=? AND (checked_out_at IS NULL OR checked_out_at>=?) ORDER BY checked_in_at`)
       .all(user.company_id,targetId,new Date(Date.parse(to)+2*86400000).toISOString(),new Date(Date.parse(from)-2*86400000).toISOString());
-    const sessions=splitSessions(rows,from,to);
-    const assignment=db.prepare(`SELECT s.duty_minutes,s.schedule_kind,s.schedule_json FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
+    const sessions=splitSessionDetails(rows,from,to);
+    const assignment=db.prepare(`SELECT s.duty_minutes,s.daily_ot_cap,s.schedule_kind,s.schedule_json FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
        WHERE a.company_id=? AND a.user_id=?`).get(user.company_id,targetId);
     const requests=db.prepare(`SELECT type,work_date,minutes FROM personnel_requests
        WHERE company_id=? AND user_id=? AND status='approved' AND work_date BETWEEN ? AND ?`).all(user.company_id,targetId,from,to);
     const holidays=new Set(db.prepare('SELECT work_date FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(user.company_id,from,to).map(x=>x.work_date));
     const days=[],cursor=new Date(from+'T12:00:00Z'),limit=new Date(to+'T12:00:00Z');
-    while(cursor<=limit){const day=cursor.toISOString().slice(0,10);days.push(dailyWork({day,worked:sessions.get(day)||0,duty:dutyForDay(assignment,day),approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
-    return json(res,200,{user_id:targetId,from,to,days,totals:sumWork(days),note:'محاسبات نسخه پایه: موظفی شیفت روزانه، تعطیلات دستی و جمعه؛ بدون تقویم رسمی، سقف اضافه‌کاری و قواعد پیشرفته خطیار.'});
+    while(cursor<=limit){const day=cursor.toISOString().slice(0,10),parts=sessions.get(day)||[];
+      const worked=parts.reduce((total,p)=>total+(p.end-p.start)/60000,0);
+      days.push(dailyWork({day,worked,night:nightMinutes(parts,day),duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
+    return json(res,200,{user_id:targetId,from,to,days,totals:sumWork(days),authoritative:false,engine:'hozoryar-work-v2',reference:'khatyar/php/lib/ShiftCalc.php',note:'گزارش مقدماتی: سقف اضافه‌کاری روزانه و شب‌کاری افزوده شده‌اند. تقویم رسمی، پنجره‌های شیفت، تأخیر/تعجیل و قواعد سازمانی هنوز تطبیق کامل نشده‌اند؛ برای حقوق قطعی استفاده نشود.'});
   }
   if (path==='/api/settings' && method==='GET') {
     owner(user);const s=settings(user.company_id);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dailyWork, dutyForDay, splitSessions, sumWork } from '../server/work.js';
+import { dailyWork, dutyForDay, nightMinutes, splitSessionDetails, splitSessions, sumWork } from '../server/work.js';
 
 test('Friday is exclusive of a manually declared holiday',()=>{
   const friday=dailyWork({day:'2026-10-30',worked:600,duty:480,holiday:true});
@@ -43,4 +43,20 @@ test('weekly, rotating and floating shifts use independent duty rules',()=>{
   assert.equal(dutyForDay(rotating,'2026-11-03'),0);
   assert.equal(dutyForDay(rotating,'2026-10-31'),0);
   assert.equal(dutyForDay({duty_minutes:360,schedule_kind:'floating',schedule_json:'{}'},'2026-11-02'),360);
+});
+
+test('Khatyar overtime cap separates overtime and surplus without duplication',()=>{
+  const day=dailyWork({day:'2026-11-02',worked:600,duty:480,overtimeCap:27});
+  assert.equal(day.overtime,27);assert.equal(day.surplus,93);
+  assert.equal(day.total_overtime,27);assert.equal(day.regular_extra,120);
+  const friday=dailyWork({day:'2026-10-30',worked:600,duty:480,holiday:true,overtimeCap:27});
+  assert.equal(friday.overtime,0);assert.equal(friday.friday_work,600);
+  assert.equal(friday.holiday_work,0);assert.equal(friday.total_overtime,600);
+});
+
+test('Khatyar night period 22:00 to 06:00 is counted in Tehran time',()=>{
+  const parts=splitSessionDetails([{checked_in_at:'2026-11-01T17:30:00Z',checked_out_at:'2026-11-02T03:30:00Z'}],
+    '2026-11-01','2026-11-02',new Date('2026-11-02T04:00:00Z'));
+  assert.equal(nightMinutes(parts.get('2026-11-01'), '2026-11-01'),120);
+  assert.equal(nightMinutes(parts.get('2026-11-02'), '2026-11-02'),360);
 });
