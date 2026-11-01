@@ -10,6 +10,8 @@ require_once dirname(__DIR__) . '/lib/MonitoringApi.php';
 require_once dirname(__DIR__) . '/lib/DashboardApi.php';
 require_once dirname(__DIR__) . '/lib/WorkReportApi.php';
 require_once dirname(__DIR__) . '/lib/ArchiveApi.php';
+require_once dirname(__DIR__) . '/lib/PlatformApi.php';
+require_once dirname(__DIR__) . '/lib/CorrectionsApi.php';
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -37,7 +39,25 @@ function jsonBody(): array {
 try {
     $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    // Serve the existing, reviewed RTL panel without copying or exposing the project tree.
+    // PHP is the single web entry point on a shared host (no Node static server required).
+    $assets=['/'=>'index.html','/index.html'=>'index.html','/app.js'=>'app.js',
+        '/style.css'=>'style.css','/nav.css'=>'nav.css','/tokens.css'=>'tokens.css','/manifest.json'=>'manifest.json'];
+    if(($method==='GET'||$method==='HEAD')&&(isset($assets[$path])||$path==='/brand-logo.png')){
+        $file=$path==='/brand-logo.png'?dirname(__DIR__,2).'/branding/hozoryar-logo.png':dirname(__DIR__,2).'/web/'.$assets[$path];
+        if(!is_file($file))respond(404,['error'=>'فایل یافت نشد']);
+        $type=match(pathinfo($file,PATHINFO_EXTENSION)){
+            'html'=>'text/html; charset=utf-8','css'=>'text/css; charset=utf-8',
+            'js'=>'text/javascript; charset=utf-8','json'=>'application/manifest+json','png'=>'image/png',
+            default=>'application/octet-stream'};
+        header('Content-Type: '.$type);
+        header('Cache-Control: '.(($path==='/'||$path==='/index.html')?'no-store':'public, max-age=3600'));
+        header('Content-Length: '.filesize($file));
+        if($method==='GET')readfile($file);
+        exit;
+    }
     if ($path === '/api/health' && $method === 'GET') respond(200, ['ok' => true, 'service' => 'hozoryar-php', 'stage' => 'auth-foundation']);
+    if (PlatformApi::handle($path,$method)) exit;
     if ($path === '/api/login' && $method === 'POST') {
         $body = jsonBody();
         $company = $body['company'] ?? null;
@@ -67,6 +87,7 @@ try {
             respond(402,['error'=>'اشتراک شرکت به پایان رسیده است']);
         if (PersonnelApi::handle($path,$method,$user)) exit;
         if (AttendanceApi::handle($path,$method,$user)) exit;
+        if (CorrectionsApi::handle($path,$method,$user)) exit;
         if (ShiftApi::handle($path,$method,$user)) exit;
         if (RequestsApi::handle($path,$method,$user)) exit;
         if (CalendarApi::handle($path,$method,$user)) exit;
