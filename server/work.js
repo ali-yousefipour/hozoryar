@@ -14,7 +14,7 @@ export function dutyForDay(shift,day) {
   const kind=shift.schedule_kind||'fixed',config=JSON.parse(shift.schedule_json||'{}');
   const weekday=new Date(day+'T12:00:00Z').getUTCDay();
   if(kind==='auto')return config.auto_expected_min??453;
-  if(kind==='advanced')return segmentDefinitions(shift,day).reduce((sum,seg)=>sum+segmentDuration(seg),0);
+  if(kind==='advanced'||kind==='rotation_segments')return segmentDefinitions(shift,day).reduce((sum,seg)=>sum+segmentDuration(seg),0);
   if(kind==='weekly')return config.days.includes(weekday)?shift.duty_minutes:0;
   if(kind==='rotating'){
     const elapsed=Math.floor((Date.parse(day+'T00:00:00Z')-Date.parse(config.anchor+'T00:00:00Z'))/86400000);
@@ -27,7 +27,16 @@ export function dutyForDay(shift,day) {
 const minuteOfValue=h=>{const [hour,minute]=String(h).split(':').map(Number);return hour*60+minute;};
 const segmentDuration=seg=>{const start=minuteOfValue(seg.s),end=minuteOfValue(seg.e);return end<=start?end+1440-start:end-start;};
 export function segmentDefinitions(shift,day){
-  if(!shift||shift.schedule_kind!=='advanced')return [];
+  if(!shift||!['advanced','rotation_segments'].includes(shift.schedule_kind))return [];
+  if(shift.schedule_kind==='rotation_segments'){
+    const {anchor,cycle}=JSON.parse(shift.schedule_json||'{}');
+    if(!anchor||!Array.isArray(cycle)||day<anchor)return [];
+    const length=cycle.reduce((total,phase)=>total+phase.days,0);
+    if(!length)return [];
+    let position=(Date.parse(day+'T00:00:00Z')-Date.parse(anchor+'T00:00:00Z'))/86400000%length;
+    for(const phase of cycle){if(position<phase.days)return phase.segments;position-=phase.days;}
+    return [];
+  }
   const cfg=JSON.parse(shift.schedule_json||'{}'),weekday=new Date(day+'T12:00:00Z').getUTCDay();
   return cfg.weekly?.[weekday]||[];
 }
@@ -42,7 +51,7 @@ export function allowedShiftTraffic(shift,at,action){
   const today=tehranDate(new Date(now));
   const previous=new Date(Date.parse(today+'T12:00:00Z')-86400000).toISOString().slice(0,10);
   for(const day of [today,previous]){
-    const segments=shift.schedule_kind==='advanced'?segmentDefinitions(shift,day):dutyForDay(shift,day)>0?[{s:shift.start_time,e:shift.end_time}]:[];
+    const segments=['advanced','rotation_segments'].includes(shift.schedule_kind)?segmentDefinitions(shift,day):dutyForDay(shift,day)>0?[{s:shift.start_time,e:shift.end_time}]:[];
     for(const segment of segments){
       const start=minuteOfValue(segment.s),end=minuteOfValue(segment.e);
       const begin=localInstant(day,start),finish=localInstant(day,end<=start?end+1440:end);
@@ -114,7 +123,7 @@ export function attendanceMetrics(shift,day,rawParts,config={}) {
   const night=Math.floor([...nights].reduce((total,[date,segments])=>total+nightMinutes(segments,date),0));
   if(!shift)return {worked,in_shift:0,night,late_in:0,early_out:0,window_extra:0};
   if(['floating','auto'].includes(shift.schedule_kind))return {worked,in_shift:worked,night,late_in:0,early_out:0,window_extra:0};
-  if(shift.schedule_kind==='advanced'){
+  if(['advanced','rotation_segments'].includes(shift.schedule_kind)){
     const segments=segmentDefinitions(shift,day).map(s=>{
       const begin=localInstant(day,minuteOf(s.s)),end=minuteOf(s.e),start=minuteOf(s.s);
       return {begin,finish:localInstant(day,end<=start?end+1440:end)};

@@ -433,6 +433,15 @@ test('platform administrator alone can configure per-company subscription and pe
   assert.equal((await api('/api/platform/companies',platform)).status,401);
 });
 
+test('segmented rotation validates each company cycle and overlap rules',async()=>{
+  const base={name:'چرخش فازها',start_time:'07:00',end_time:'15:00',duty_minutes:480,daily_ot_cap:27,schedule_kind:'rotation_segments'};
+  const schedule={anchor:'2026-11-01',cycle:[{days:7,segments:[{s:'07:00',e:'15:00'}]},{days:7,segments:[{s:'15:00',e:'23:00'}]},{days:7,segments:[{s:'23:00',e:'07:00'}]}]};
+  const created=await api('/api/shifts',a,'POST',{...base,schedule});assert.equal(created.status,201);
+  assert.equal((await api('/api/shifts',b)).body.items.some(s=>s.id===created.body.id),false);
+  assert.equal((await api('/api/shifts',a,'POST',{...base,schedule:{...schedule,cycle:[{days:1,segments:[{s:'08:00',e:'12:00'},{s:'11:00',e:'15:00'}]}]}})).status,400);
+  assert.equal((await api('/api/shifts',a,'POST',{...base,schedule:{...schedule,cycle:[{days:0,segments:[]}]}})).status,400);
+});
+
 test('advanced shifts validate overlapping segments and remain tenant-owned',async()=>{
   const base={name:'شیفت دو بخشی',start_time:'08:00',end_time:'17:00',duty_minutes:480,schedule_kind:'advanced'};
   const invalid=await api('/api/shifts',a,'POST',{...base,schedule:{weekly:{1:[{s:'08:00',e:'12:00'},{s:'11:30',e:'16:00'}]}}});

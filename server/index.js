@@ -238,14 +238,15 @@ async function api(req,res,url) {
     if(!str(b.name)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.start_time)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.end_time)||!Number.isInteger(b.duty_minutes)||b.duty_minutes<0||b.duty_minutes>1440) throw fail(400,'اطلاعات شیفت نامعتبر است');
     const cap=b.daily_ot_cap??27;if(!Number.isInteger(cap)||cap<0||cap>1440)throw fail(400,'سقف اضافه‌کاری روزانه نامعتبر است');
     const kind=b.schedule_kind||'fixed',config=b.schedule||{};
-    if(!['fixed','weekly','rotating','floating','advanced','auto'].includes(kind))throw fail(400,'نوع شیفت نامعتبر است');
+    if(!['fixed','weekly','rotating','rotation_segments','floating','advanced','auto'].includes(kind))throw fail(400,'نوع شیفت نامعتبر است');
     if(kind==='auto'&&config.auto_expected_min!==undefined&&(!Number.isInteger(config.auto_expected_min)||config.auto_expected_min<0||config.auto_expected_min>1440))throw fail(400,'موظفی شیفت خودکار نامعتبر است');
     if(kind==='weekly'&&(!Array.isArray(config.days)||config.days.some(x=>!Number.isInteger(x)||x<0||x>6)||new Set(config.days).size!==config.days.length))throw fail(400,'روزهای شیفت هفتگی نامعتبر است');
     if(kind==='rotating'&&(!Number.isInteger(config.work)||config.work<1||config.work>30||!Number.isInteger(config.rest)||config.rest<1||config.rest>30||!/^\d{4}-\d{2}-\d{2}$/.test(config.anchor||'')||Number.isNaN(Date.parse(config.anchor))))throw fail(400,'چرخه شیفت نامعتبر است');
-    if(kind==='advanced'){
-      if(!config.weekly||typeof config.weekly!=='object'||Array.isArray(config.weekly)||Object.keys(config.weekly).some(day=>!/^[0-6]$/.test(day)))throw fail(400,'تقویم شیفت چندبخشی نامعتبر است');
+    if(kind==='rotation_segments'&&(!validDay(config.anchor)||!Array.isArray(config.cycle)||config.cycle.length<1||config.cycle.length>12||config.cycle.some(phase=>!phase||!Number.isInteger(phase.days)||phase.days<1||phase.days>60||!Array.isArray(phase.segments))))throw fail(400,'چرخه شیفت قطعه‌ای نامعتبر است');
+    if(['advanced','rotation_segments'].includes(kind)){
+      if(kind==='advanced'&&(!config.weekly||typeof config.weekly!=='object'||Array.isArray(config.weekly)||Object.keys(config.weekly).some(day=>!/^[0-6]$/.test(day))))throw fail(400,'تقویم شیفت چندبخشی نامعتبر است');
       const hm=v=>/^([01]\d|2[0-3]):[0-5]\d$/.test(v||'');
-      for(const items of Object.values(config.weekly)){
+      for(const items of (kind==='advanced'?Object.values(config.weekly):config.cycle.map(phase=>phase.segments))){
         if(!Array.isArray(items)||items.length>4)throw fail(400,'حداکثر چهار بازه شیفت در روز مجاز است');
         const intervals=[];
         for(const item of items){if(!item||!hm(item.s)||!hm(item.e))throw fail(400,'ساعت بازه شیفت نامعتبر است');

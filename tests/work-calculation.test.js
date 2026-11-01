@@ -109,6 +109,22 @@ test('advanced Khatyar-style split shift excludes breaks and derives daily duty 
   assert.equal(report.shortage,10);assert.equal(report.overtime,27);assert.equal(report.surplus,18);
 });
 
+test('Khatyar segmented rotation cycles through distinct periods and overnight attendance',()=>{
+  const shift={schedule_kind:'rotation_segments',schedule_json:JSON.stringify({anchor:'2026-11-02',cycle:[
+    {days:2,segments:[{s:'07:00',e:'15:00'}]},
+    {days:1,segments:[]},
+    {days:2,segments:[{s:'23:00',e:'07:00'}]}
+  ]})};
+  assert.equal(dutyForDay(shift,'2026-11-01'),0);
+  assert.equal(dutyForDay(shift,'2026-11-02'),480);
+  assert.equal(dutyForDay(shift,'2026-11-04'),0);
+  assert.equal(dutyForDay(shift,'2026-11-05'),480);
+  assert.equal(dutyForDay(shift,'2026-11-07'),480);
+  const day='2026-11-05',metrics=attendanceMetrics(shift,day,[{start:localInstant(day,23*60),end:localInstant(day,31*60)}]);
+  assert.equal(metrics.worked,480);assert.equal(metrics.in_shift,480);
+  assert.equal(metrics.late_in,0);assert.equal(metrics.early_out,0);
+});
+
 test('overtime windows count only approved margins and respect daily cap',()=>{
   const day='2026-11-02';
   const parts=[{start:localInstant(day,7*60+15),end:localInstant(day,16*60+45)}];
