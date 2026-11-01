@@ -5,6 +5,8 @@ require_once dirname(__DIR__) . '/lib/PersonnelApi.php';
 require_once dirname(__DIR__) . '/lib/AttendanceApi.php';
 require_once dirname(__DIR__) . '/lib/ShiftApi.php';
 require_once dirname(__DIR__) . '/lib/RequestsApi.php';
+require_once dirname(__DIR__) . '/lib/CalendarApi.php';
+require_once dirname(__DIR__) . '/lib/MonitoringApi.php';
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -64,6 +66,8 @@ try {
         if (AttendanceApi::handle($path,$method,$user)) exit;
         if (ShiftApi::handle($path,$method,$user)) exit;
         if (RequestsApi::handle($path,$method,$user)) exit;
+        if (CalendarApi::handle($path,$method,$user)) exit;
+        if (MonitoringApi::handle($path,$method,$user)) exit;
         respond(501, ['error' => 'این قابلیت هنوز به نسخه PHP منتقل نشده است']);
     }
     respond(503, ['error' => 'رابط وب پس از تکمیل انتقال APIها در نسخه PHP فعال خواهد شد']);
