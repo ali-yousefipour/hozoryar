@@ -129,6 +129,36 @@ test('calendar holidays and overnight report remain tenant-scoped',async()=>{
   assert.equal((await api('/api/work-report?from=2026-10-20&to=2026-10-21',b)).body.totals.worked,0);
 });
 
+test('official-reference day is used in work reporting and Friday is not double-counted',async()=>{
+  const date='2026-03-21';
+  const calendar=await api('/api/calendar?from='+date+'&to='+date,a);
+  assert.equal(calendar.status,200);
+  assert.equal(calendar.body.official_reference_available,true);
+  assert.equal(calendar.body.official_calendar_available,false);
+  assert.equal(calendar.body.days[0].is_official_holiday,true);
+  const inserted=openDatabase(process.env.DB_PATH);
+  inserted.prepare('INSERT INTO attendance(company_id,user_id,checked_in_at,checked_out_at) VALUES(?,?,?,?)')
+    .run(1,3,'2026-03-21T05:00:00Z','2026-03-21T06:00:00Z');
+  inserted.close();
+  const report=await api('/api/work-report?from='+date+'&to='+date+'&user_id=3',a);
+  assert.equal(report.status,200);
+  assert.equal(report.body.days[0].holiday_work,60);
+  assert.equal(report.body.days[0].friday_work,0);
+  assert.equal(report.body.days[0].is_official_holiday,true);
+  assert.equal(report.body.days[0].holiday_source,'official-reference');
+  assert.equal(report.body.authoritative,false);
+  assert.equal((await api('/api/work-report?from='+date+'&to='+date,b)).body.days[0].worked,0);
+  const fridayDb=openDatabase(process.env.DB_PATH);
+  fridayDb.prepare('INSERT INTO attendance(company_id,user_id,checked_in_at,checked_out_at) VALUES(?,?,?,?)')
+    .run(1,3,'2026-06-05T05:00:00Z','2026-06-05T06:00:00Z');
+  fridayDb.close();
+  const friday=(await api('/api/work-report?from=2026-06-05&to=2026-06-05&user_id=3',a)).body.days[0];
+  assert.equal(friday.is_official_holiday,true);
+  assert.equal(friday.friday_work,60);
+  assert.equal(friday.holiday_work,0);
+  assert.equal(friday.total_overtime,60);
+});
+
 test('monthly archive is owner-only, immutable, tenant-scoped and blocked by pending requests',async()=>{
   const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
   const manager=(await api('/api/login',null,'POST',{company:'alpha',username:'middle',password:'strong-password-123'})).body.token;

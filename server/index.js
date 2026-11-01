@@ -48,13 +48,19 @@ function buildWorkReport(companyId,targetId,from,to) {
     WHERE a.company_id=? AND a.user_id=?`).get(companyId,targetId);
   const requests=db.prepare(`SELECT type,work_date,minutes FROM personnel_requests
     WHERE company_id=? AND user_id=? AND status='approved' AND work_date BETWEEN ? AND ?`).all(companyId,targetId,from,to);
-  const holidays=new Set(db.prepare('SELECT work_date FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(companyId,from,to).map(x=>x.work_date));
+  const manual=new Map(db.prepare('SELECT work_date,title FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(companyId,from,to).map(x=>[x.work_date,x.title]));
+  const calendar=calendarDays(from,to,manual),byDate=new Map(calendar.map(x=>[x.date,x]));
   const days=[],cursor=new Date(from+'T12:00:00Z'),limit=new Date(to+'T12:00:00Z');
   while(cursor<=limit){const day=cursor.toISOString().slice(0,10),parts=sessions.get(day)||[];
     const policy=assignment?JSON.parse(assignment.schedule_json||'{}'):{};
     const metrics=attendanceMetrics(assignment,day,parts,policy);
-    days.push(dailyWork({day,...metrics,duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,hasShift:!!assignment,approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
-  return {user_id:targetId,from,to,days,totals:sumWork(days),authoritative:false,engine:'hozoryar-work-v3',reference:'khatyar/php/lib/ShiftCalc.php',note:'محاسبه شیفت و شب‌کاری بر مبنای تاریخ ورود و پنجره‌های شیفت انجام می‌شود. تقویم رسمی و سیاست‌های پیشرفته سازمانی هنوز تطبیق کامل نشده‌اند؛ برای حقوق قطعی استفاده نشود.'};
+    const classification=byDate.get(day);
+    days.push({...dailyWork({day,...metrics,duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,hasShift:!!assignment,approved:requests.filter(r=>r.work_date===day),holiday:classification.is_official_holiday||classification.is_manual_holiday}),
+      jalali:classification.jalali,is_official_holiday:classification.is_official_holiday,is_manual_holiday:classification.is_manual_holiday,
+      holiday_title:classification.title,holiday_source:classification.source});cursor.setUTCDate(cursor.getUTCDate()+1);}
+  return {user_id:targetId,from,to,days,totals:sumWork(days),authoritative:false,engine:'hozoryar-work-v4',reference:'khatyar/php/lib/ShiftCalc.php + IranCalendar.php',
+    official_calendar_available:false,official_reference_available:calendar.every(x=>x.official_reference_available),
+    note:'تعطیلات سال‌های ۱۴۰۴ و ۱۴۰۵ از فهرست مرجع خطیار اعمال شده‌اند (نه تأیید برخط رسمی). گزارش هنوز برای حقوق قطعی معتبر نیست.'};
 }
 function monthBounds(key) {
   const jalali=/^j-(1[34]\d{2}-(?:0[1-9]|1[0-2]))$/.exec(key||'');
@@ -224,7 +230,9 @@ async function api(req,res,url) {
     const from=url.searchParams.get('from'),to=url.searchParams.get('to');
     if(!/^\d{4}-\d{2}-\d{2}$/.test(from||'')||!/^\d{4}-\d{2}-\d{2}$/.test(to||'')||!Number.isFinite(Date.parse(from))||!Number.isFinite(Date.parse(to))||from>to||Date.parse(to)-Date.parse(from)>35*86400000)throw fail(400,'بازه تقویم نامعتبر است');
     const manual=new Map(db.prepare('SELECT work_date,title FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(user.company_id,from,to).map(r=>[r.work_date,r.title]));
-    return json(res,200,{days:calendarDays(from,to,manual),official_calendar_available:false,note:'تعطیلات رسمی هنوز از منبع رسمی بارگذاری نشده‌اند؛ تنها جمعه و تعطیلات اختصاصی شرکت مبنای محاسبه‌اند.'});
+    const days=calendarDays(from,to,manual);
+    return json(res,200,{days,official_calendar_available:false,official_reference_available:days.every(x=>x.official_reference_available),
+      note:'برای سال‌های ۱۴۰۴ و ۱۴۰۵ تعطیلات مرجع خطیار اعمال می‌شوند. منبع رسمی برخط تأیید نشده است؛ سایر سال‌ها تنها جمعه و تعطیلات اختصاصی لحاظ می‌شوند.'});
   }
   if(path==='/api/holidays' && method==='POST') {
     owner(user);const b=await body(req);
@@ -265,7 +273,8 @@ async function api(req,res,url) {
       const people=db.prepare('SELECT id,name,role FROM users WHERE company_id=? AND active=1 ORDER BY id').all(user.company_id);
       const reports=people.map(person=>({...person,report:buildWorkReport(user.company_id,person.id,from,to)}));
       const snapshot={month,calendar:month.startsWith('j-')?'jalali':'gregorian',from,to,status:'archived',authoritative:false,official_calendar_available:false,
-        note:'این سند یک نسخه ثابت از محاسبات غیرقطعی است؛ تأیید حقوق و دستمزد محسوب نمی‌شود.',reports};
+        official_reference_available:reports.every(x=>x.report.official_reference_available),
+        note:'این سند ثابت شامل داده مرجع تعطیلات خطیار است و تأیید حقوق و دستمزد محسوب نمی‌شود.',reports};
       db.prepare('INSERT INTO work_month_archives(company_id,month,snapshot_json,created_by) VALUES(?,?,?,?)')
         .run(user.company_id,month,JSON.stringify(snapshot),user.id);
       audit(user,'work_month.archive','work_month',null);
