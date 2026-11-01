@@ -122,3 +122,25 @@ test('overtime windows count only approved margins and respect daily cap',()=>{
   assert.equal(report.overtime,27);
   assert.equal(report.surplus,63);
 });
+
+test('unpaid leave is separately reported, excuses absence but is never counted as presence or paid leave',()=>{
+  const report=dailyWork({day:'2026-11-02',worked:0,in_shift:0,duty:480,
+    approved:[{type:'unpaid_leave',minutes:480}],hasShift:true});
+  assert.equal(report.unpaid_leave,480);
+  assert.equal(report.leave,0);assert.equal(report.mission,0);
+  assert.equal(report.worked,0);assert.equal(report.shortage,0);
+  assert.equal(report.absence,0);
+  assert.equal(sumWork([report]).unpaid_leave,480);
+});
+
+test('Khatyar automatic shift uses independent daily duty and no fixed-clock tardiness',()=>{
+  const day='2026-11-02';
+  const shift={schedule_kind:'auto',schedule_json:JSON.stringify({auto_expected_min:453})};
+  const metrics=attendanceMetrics(shift,day,[{start:localInstant(day,9*60),end:localInstant(day,17*60)}]);
+  assert.equal(dutyForDay(shift,day),453);
+  assert.equal(metrics.worked,480);assert.equal(metrics.in_shift,480);
+  assert.equal(metrics.late_in,0);assert.equal(metrics.early_out,0);
+  const report=dailyWork({day,...metrics,duty:dutyForDay(shift,day),overtimeCap:27});
+  assert.equal(report.overtime,27);assert.equal(report.shortage,0);
+  assert.equal(report.surplus,0);
+});

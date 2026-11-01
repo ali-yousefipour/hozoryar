@@ -90,7 +90,7 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
     );
     CREATE TABLE IF NOT EXISTS personnel_requests (
       id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('annual_leave','sick_leave','mission')),
+      type TEXT NOT NULL CHECK(type IN ('annual_leave','sick_leave','unpaid_leave','mission')),
       work_date TEXT NOT NULL, minutes INTEGER NOT NULL CHECK(minutes BETWEEN 1 AND 1440),
       description TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
@@ -174,5 +174,27 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
   const requestColumns=db.prepare('PRAGMA table_info(personnel_requests)').all().map(x=>x.name);
   if(!requestColumns.includes('end_date'))db.exec('ALTER TABLE personnel_requests ADD COLUMN end_date TEXT');
   if(!requestColumns.includes('unit'))db.exec("ALTER TABLE personnel_requests ADD COLUMN unit TEXT NOT NULL DEFAULT 'hourly' CHECK(unit IN ('hourly','daily'))");
+  const requestSql=db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='personnel_requests'").get()?.sql||'';
+  if(!requestSql.includes("'unpaid_leave'")){
+    // Rebuild SQLite CHECK in one transaction; preserve IDs, approvals and all older data.
+    db.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE personnel_requests_migrated (
+        id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('annual_leave','sick_leave','unpaid_leave','mission')),
+        work_date TEXT NOT NULL, minutes INTEGER NOT NULL CHECK(minutes BETWEEN 1 AND 1440),
+        description TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+        decided_by INTEGER, decided_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        end_date TEXT,unit TEXT NOT NULL DEFAULT 'hourly' CHECK(unit IN ('hourly','daily')),
+        FOREIGN KEY(company_id,user_id) REFERENCES users(company_id,id),
+        FOREIGN KEY(company_id,decided_by) REFERENCES users(company_id,id)
+      );
+      INSERT INTO personnel_requests_migrated(id,company_id,user_id,type,work_date,minutes,description,status,decided_by,decided_at,created_at,end_date,unit)
+        SELECT id,company_id,user_id,type,work_date,minutes,description,status,decided_by,decided_at,created_at,end_date,unit FROM personnel_requests;
+      DROP TABLE personnel_requests;
+      ALTER TABLE personnel_requests_migrated RENAME TO personnel_requests;
+      CREATE INDEX personnel_requests_company_date ON personnel_requests(company_id,work_date,status);
+      COMMIT;`);
+  }
   return db;
 }

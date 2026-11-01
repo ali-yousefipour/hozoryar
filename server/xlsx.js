@@ -20,7 +20,7 @@ const cell=(value,index,row,style)=>{
   return `<c r="${ref}" t="inlineStr"${attr}><is><t>${xml(value)}</t></is></c>`;
 };
 export function archivedWorkXlsx(snapshot){
-  const fields=[['worked','حضور کل'],['in_shift','حضور در شیفت'],['expected','موظفی'],['late_in','تأخیر ورود'],['early_out','تعجیل خروج'],['shortage','کسری کار'],['absence','غیبت'],['night','شب‌کاری'],['overtime','اضافه‌کاری'],['mission','مأموریت'],['leave','مرخصی'],['surplus','مازاد حضور'],['holiday_work','تعطیل‌کاری'],['friday_work','جمعه‌کاری']];
+  const fields=[['worked','حضور کل'],['in_shift','حضور در شیفت'],['expected','موظفی'],['late_in','تأخیر ورود'],['early_out','تعجیل خروج'],['shortage','کسری کار'],['absence','غیبت'],['night','شب‌کاری'],['overtime','اضافه‌کاری'],['mission','مأموریت'],['leave','مرخصی با حقوق'],['unpaid_leave','مرخصی بدون حقوق'],['surplus','مازاد حضور'],['holiday_work','تعطیل‌کاری'],['friday_work','جمعه‌کاری']];
   const rows=[[`گزارش بایگانی کارکرد ${snapshot.month} — غیرقطعی و غیرمالی`],['نام کارمند','سمت',...fields.map(x=>x[1])]];
   for(const person of snapshot.reports){const totals=person.report.totals;rows.push([person.name,person.role,...fields.map(([key])=>(totals[key]||0)/1440)]);}
   const sheetRows=rows.map((values,i)=>`<row r="${i+1}"${i===0?' ht="34" customHeight="1"':''}>${values.map((v,j)=>cell(v,j,i+1,i===1?1:i>1&&j>=2?2:0)).join('')}</row>`).join('');

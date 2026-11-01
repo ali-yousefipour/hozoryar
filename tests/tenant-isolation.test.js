@@ -133,6 +133,21 @@ test('multi-day mission is approved once, credited each day and blocks archive w
   assert.equal((await api('/api/work-report?from=2026-08-10&to=2026-08-12',b)).body.totals.mission,0);
 });
 
+test('unpaid leave is tenant-isolated, approved in two stages and excluded from annual balance',async()=>{
+  const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
+  const manager=(await api('/api/login',null,'POST',{company:'alpha',username:'middle',password:'strong-password-123'})).body.token;
+  const before=(await api('/api/leave-balance?year=1405',staff)).body.used_minutes;
+  const created=await api('/api/requests',staff,'POST',{type:'unpaid_leave',work_date:'2026-07-11',minutes:480,unit:'daily',description:'مرخصی بدون حقوق'});
+  assert.equal(created.status,201);
+  assert.equal((await api('/api/requests',b)).body.items.some(x=>x.id===created.body.id),false);
+  assert.equal((await api(`/api/requests/${created.body.id}/decision`,manager,'POST',{status:'approved'})).status,200);
+  assert.equal((await api(`/api/requests/${created.body.id}/decision`,a,'POST',{status:'approved'})).status,200);
+  const report=(await api('/api/work-report?from=2026-07-11&to=2026-07-11',staff)).body.days[0];
+  assert.equal(report.unpaid_leave,480);assert.equal(report.leave,0);
+  assert.equal(report.shortage,0);assert.equal(report.worked,0);
+  assert.equal((await api('/api/leave-balance?year=1405',staff)).body.used_minutes,before);
+});
+
 test('annual leave quota is company-specific, checked at final approval and employee-visible',async()=>{
   const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
   const manager=(await api('/api/login',null,'POST',{company:'alpha',username:'middle',password:'strong-password-123'})).body.token;
@@ -361,4 +376,12 @@ test('advanced shifts validate overlapping segments and remain tenant-owned',asy
   const good=await api('/api/shifts',a,'POST',{...base,schedule:{weekly:{1:[{s:'08:00',e:'12:00'},{s:'13:00',e:'17:00'}]}}});
   assert.equal(good.status,201);
   assert.equal((await api('/api/assignments',b,'POST',{user_id:2,shift_id:good.body.id})).status,404);
+});
+
+test('automatic shift enforces its custom duty bounds and stays inside company',async()=>{
+  const base={name:'شیفت خودکار',start_time:'00:00',end_time:'00:00',duty_minutes:453,schedule_kind:'auto'};
+  assert.equal((await api('/api/shifts',a,'POST',{...base,schedule:{auto_expected_min:1500}})).status,400);
+  const created=await api('/api/shifts',a,'POST',{...base,schedule:{auto_expected_min:453}});
+  assert.equal(created.status,201);
+  assert.equal((await api('/api/shifts',b)).body.items.some(s=>s.id===created.body.id),false);
 });

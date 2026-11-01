@@ -13,6 +13,7 @@ export function dutyForDay(shift,day) {
   if(!shift)return 0;
   const kind=shift.schedule_kind||'fixed',config=JSON.parse(shift.schedule_json||'{}');
   const weekday=new Date(day+'T12:00:00Z').getUTCDay();
+  if(kind==='auto')return config.auto_expected_min??453;
   if(kind==='advanced')return segmentDefinitions(shift,day).reduce((sum,seg)=>sum+segmentDuration(seg),0);
   if(kind==='weekly')return config.days.includes(weekday)?shift.duty_minutes:0;
   if(kind==='rotating'){
@@ -90,7 +91,7 @@ export function attendanceMetrics(shift,day,rawParts,config={}) {
   const nights=splitSessionDetails(parts.map(p=>({checked_in_at:new Date(p.start).toISOString(),checked_out_at:new Date(p.end).toISOString()})),day,'9999-12-31',new Date(Math.max(Date.now(),...parts.map(p=>p.end),0)));
   const night=Math.floor([...nights].reduce((total,[date,segments])=>total+nightMinutes(segments,date),0));
   if(!shift)return {worked,in_shift:0,night,late_in:0,early_out:0,window_extra:0};
-  if(shift.schedule_kind==='floating')return {worked,in_shift:worked,night,late_in:0,early_out:0,window_extra:0};
+  if(['floating','auto'].includes(shift.schedule_kind))return {worked,in_shift:worked,night,late_in:0,early_out:0,window_extra:0};
   if(shift.schedule_kind==='advanced'){
     const segments=segmentDefinitions(shift,day).map(s=>{
       const begin=localInstant(day,minuteOf(s.s)),end=minuteOf(s.e),start=minuteOf(s.s);
@@ -132,15 +133,16 @@ export function dailyWork({day,worked=0,duty=0,approved=[],holiday=false,overtim
   const friday=isFriday(day);
   const expected=friday||holiday?0:Math.max(0,duty);
   const leave=approved.filter(x=>x.type==='annual_leave'||x.type==='sick_leave').reduce((sum,x)=>sum+x.minutes,0);
+  const unpaid_leave=approved.filter(x=>x.type==='unpaid_leave').reduce((sum,x)=>sum+x.minutes,0);
   const mission=approved.filter(x=>x.type==='mission').reduce((sum,x)=>sum+x.minutes,0);
-  const credited=Math.min(expected,leave+mission);
+  const credited=Math.min(expected,leave+unpaid_leave+mission);
   const effectiveInShift=friday||holiday?0:in_shift;
   const shortage=Math.max(0,expected-Math.min(expected,effectiveInShift)-credited);
   const absent=expected>0&&rounded===0&&credited===0;
   const extra=Math.max(0,rounded-expected,window_extra);
   const overtime=friday||holiday||!hasShift||expected===0?0:Math.min(extra,Math.max(0,overtimeCap));
   const surplus=friday||holiday||!hasShift||expected===0?0:Math.max(0,extra-overtime);
-  return {day,worked:rounded,in_shift:Math.floor(effectiveInShift),expected,leave,mission,shortage,absence:absent?shortage:0,absence_days:absent?1:0,absence_and_shortage:shortage,surplus,overtime,night,
+  return {day,worked:rounded,in_shift:Math.floor(effectiveInShift),expected,leave,unpaid_leave,mission,shortage,absence:absent?shortage:0,absence_days:absent?1:0,absence_and_shortage:shortage,surplus,overtime,night,
     late_in:friday||holiday||!hasShift?0:late_in,early_out:friday||holiday||!hasShift?0:early_out,
     friday_work:friday?rounded:0,holiday_work:holiday&&!friday?rounded:0,
     // Friday/holiday categories remain mutually exclusive; financial policy must not add them twice.
@@ -148,6 +150,6 @@ export function dailyWork({day,worked=0,duty=0,approved=[],holiday=false,overtim
     regular_extra:!friday&&!holiday?extra:0};
 }
 export function sumWork(rows) {
-  const keys=['worked','in_shift','expected','leave','mission','shortage','absence','absence_days','absence_and_shortage','surplus','overtime','night','late_in','early_out','total_overtime','friday_work','holiday_work','regular_extra'];
+  const keys=['worked','in_shift','expected','leave','unpaid_leave','mission','shortage','absence','absence_days','absence_and_shortage','surplus','overtime','night','late_in','early_out','total_overtime','friday_work','holiday_work','regular_extra'];
   return Object.fromEntries(keys.map(k=>[k,rows.reduce((total,r)=>total+r[k],0)]));
 }

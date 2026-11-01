@@ -185,7 +185,8 @@ async function api(req,res,url) {
     if(!str(b.name)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.start_time)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.end_time)||!Number.isInteger(b.duty_minutes)||b.duty_minutes<0||b.duty_minutes>1440) throw fail(400,'اطلاعات شیفت نامعتبر است');
     const cap=b.daily_ot_cap??27;if(!Number.isInteger(cap)||cap<0||cap>1440)throw fail(400,'سقف اضافه‌کاری روزانه نامعتبر است');
     const kind=b.schedule_kind||'fixed',config=b.schedule||{};
-    if(!['fixed','weekly','rotating','floating','advanced'].includes(kind))throw fail(400,'نوع شیفت نامعتبر است');
+    if(!['fixed','weekly','rotating','floating','advanced','auto'].includes(kind))throw fail(400,'نوع شیفت نامعتبر است');
+    if(kind==='auto'&&config.auto_expected_min!==undefined&&(!Number.isInteger(config.auto_expected_min)||config.auto_expected_min<0||config.auto_expected_min>1440))throw fail(400,'موظفی شیفت خودکار نامعتبر است');
     if(kind==='weekly'&&(!Array.isArray(config.days)||config.days.some(x=>!Number.isInteger(x)||x<0||x>6)||new Set(config.days).size!==config.days.length))throw fail(400,'روزهای شیفت هفتگی نامعتبر است');
     if(kind==='rotating'&&(!Number.isInteger(config.work)||config.work<1||config.work>30||!Number.isInteger(config.rest)||config.rest<1||config.rest>30||!/^\d{4}-\d{2}-\d{2}$/.test(config.anchor||'')||Number.isNaN(Date.parse(config.anchor))))throw fail(400,'چرخه شیفت نامعتبر است');
     if(kind==='advanced'){
@@ -233,7 +234,7 @@ async function api(req,res,url) {
   if(path==='/api/requests' && method==='POST') {
     const b=await body(req);
     const end=b.end_date||b.work_date,unit=b.unit||'hourly';
-    if(!['annual_leave','sick_leave','mission'].includes(b.type)||!validDay(b.work_date)||!validDay(end)||end<b.work_date||Date.parse(end)-Date.parse(b.work_date)>30*86400000||!['hourly','daily'].includes(unit)||(unit==='hourly'&&end!==b.work_date)||!Number.isInteger(b.minutes)||b.minutes<1||b.minutes>1440||(b.description!==undefined&&typeof b.description!=='string')||(b.description||'').length>500) throw fail(400,'اطلاعات درخواست نامعتبر است');
+    if(!['annual_leave','sick_leave','unpaid_leave','mission'].includes(b.type)||!validDay(b.work_date)||!validDay(end)||end<b.work_date||Date.parse(end)-Date.parse(b.work_date)>30*86400000||!['hourly','daily'].includes(unit)||(unit==='hourly'&&end!==b.work_date)||!Number.isInteger(b.minutes)||b.minutes<1||b.minutes>1440||(b.description!==undefined&&typeof b.description!=='string')||(b.description||'').length>500) throw fail(400,'اطلاعات درخواست نامعتبر است');
     const result=db.prepare(`INSERT INTO personnel_requests(company_id,user_id,type,work_date,end_date,unit,minutes,description)
       VALUES(?,?,?,?,?,?,?,?)`).run(user.company_id,user.id,b.type,b.work_date,end,unit,b.minutes,b.description||'');
     const id=Number(result.lastInsertRowid);audit(user,'request.create','personnel_request',id);return json(res,201,{id,status:'pending'});
