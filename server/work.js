@@ -13,6 +13,7 @@ export function dutyForDay(shift,day) {
   if(!shift)return 0;
   const kind=shift.schedule_kind||'fixed',config=JSON.parse(shift.schedule_json||'{}');
   const weekday=new Date(day+'T12:00:00Z').getUTCDay();
+  if(kind==='advanced')return segmentDefinitions(shift,day).reduce((sum,seg)=>sum+segmentDuration(seg),0);
   if(kind==='weekly')return config.days.includes(weekday)?shift.duty_minutes:0;
   if(kind==='rotating'){
     const elapsed=Math.floor((Date.parse(day+'T00:00:00Z')-Date.parse(config.anchor+'T00:00:00Z'))/86400000);
@@ -21,6 +22,13 @@ export function dutyForDay(shift,day) {
   }
   if(kind==='floating')return shift.duty_minutes;
   return shift.duty_minutes;
+}
+const minuteOfValue=h=>{const [hour,minute]=String(h).split(':').map(Number);return hour*60+minute;};
+const segmentDuration=seg=>{const start=minuteOfValue(seg.s),end=minuteOfValue(seg.e);return end<=start?end+1440-start:end-start;};
+export function segmentDefinitions(shift,day){
+  if(!shift||shift.schedule_kind!=='advanced')return [];
+  const cfg=JSON.parse(shift.schedule_json||'{}'),weekday=new Date(day+'T12:00:00Z').getUTCDay();
+  return cfg.weekly?.[weekday]||[];
 }
 const nextDateBoundary = ms => {
   const day=tehranDate(new Date(ms));let low=ms+1,high=ms+48*3600000;
@@ -75,7 +83,7 @@ function union(parts) {
   return merged;
 }
 function overlap(parts,start,end){return parts.reduce((total,p)=>total+Math.max(0,Math.min(end,p.end)-Math.max(start,p.start))/60000,0);}
-function minuteOf(hm){const [h,m]=String(hm).split(':').map(Number);return h*60+m;}
+function minuteOf(hm){return minuteOfValue(hm);}
 export function attendanceMetrics(shift,day,rawParts,config={}) {
   const parts=union(rawParts);
   const worked=Math.floor(parts.reduce((total,p)=>total+(p.end-p.start)/60000,0));
@@ -83,6 +91,22 @@ export function attendanceMetrics(shift,day,rawParts,config={}) {
   const night=Math.floor([...nights].reduce((total,[date,segments])=>total+nightMinutes(segments,date),0));
   if(!shift)return {worked,in_shift:0,night,late_in:0,early_out:0,window_extra:0};
   if(shift.schedule_kind==='floating')return {worked,in_shift:worked,night,late_in:0,early_out:0,window_extra:0};
+  if(shift.schedule_kind==='advanced'){
+    const segments=segmentDefinitions(shift,day).map(s=>{
+      const begin=localInstant(day,minuteOf(s.s)),end=minuteOf(s.e),start=minuteOf(s.s);
+      return {begin,finish:localInstant(day,end<=start?end+1440:end)};
+    }).sort((a,b)=>a.begin-b.begin);
+    if(!segments.length)return {worked,in_shift:0,night,late_in:0,early_out:0,window_extra:0};
+    const in_shift=Math.floor(segments.reduce((sum,s)=>sum+overlap(parts,s.begin,s.finish),0));
+    const first=segments[0],last=segments.at(-1),earliest=parts[0]?.start,latest=parts.at(-1)?.end;
+    const late_in=earliest===undefined?0:Math.max(0,Math.floor((earliest-first.begin)/60000)-(config.late_ok||0));
+    const early_out=latest===undefined?0:Math.max(0,Math.floor((last.finish-latest)/60000)-(config.early_ok||0));
+    const extraParts=[];
+    for(const s of segments)for(const [begin,finish] of [[s.begin-(config.ot_begin||0)*60000,s.begin],[s.finish,s.finish+(config.ot_end||0)*60000]])
+      for(const p of parts){const start=Math.max(p.start,begin),end=Math.min(p.end,finish);if(end>start)extraParts.push({start,end});}
+    const window_extra=Math.floor(union(extraParts).reduce((sum,p)=>sum+(p.end-p.start)/60000,0));
+    return {worked,in_shift,night,late_in,early_out,window_extra};
+  }
   const startMinute=minuteOf(shift.start_time),endMinute=minuteOf(shift.end_time);
   const begin=localInstant(day,startMinute),finish=localInstant(day,endMinute<=startMinute?endMinute+1440:endMinute);
   const in_shift=Math.floor(overlap(parts,begin,finish));
@@ -110,12 +134,13 @@ export function dailyWork({day,worked=0,duty=0,approved=[],holiday=false,overtim
   const leave=approved.filter(x=>x.type==='annual_leave'||x.type==='sick_leave').reduce((sum,x)=>sum+x.minutes,0);
   const mission=approved.filter(x=>x.type==='mission').reduce((sum,x)=>sum+x.minutes,0);
   const credited=Math.min(expected,leave+mission);
-  const shortage=Math.max(0,expected-Math.min(expected,in_shift)-credited);
+  const effectiveInShift=friday||holiday?0:in_shift;
+  const shortage=Math.max(0,expected-Math.min(expected,effectiveInShift)-credited);
   const absent=expected>0&&rounded===0&&credited===0;
   const extra=Math.max(0,rounded-expected,window_extra);
   const overtime=friday||holiday||!hasShift||expected===0?0:Math.min(extra,Math.max(0,overtimeCap));
   const surplus=friday||holiday||!hasShift||expected===0?0:Math.max(0,extra-overtime);
-  return {day,worked:rounded,in_shift:Math.floor(in_shift),expected,leave,mission,shortage,absence:absent?shortage:0,absence_days:absent?1:0,absence_and_shortage:shortage,surplus,overtime,night,
+  return {day,worked:rounded,in_shift:Math.floor(effectiveInShift),expected,leave,mission,shortage,absence:absent?shortage:0,absence_days:absent?1:0,absence_and_shortage:shortage,surplus,overtime,night,
     late_in:friday||holiday||!hasShift?0:late_in,early_out:friday||holiday||!hasShift?0:early_out,
     friday_work:friday?rounded:0,holiday_work:holiday&&!friday?rounded:0,
     // Friday/holiday categories remain mutually exclusive; financial policy must not add them twice.

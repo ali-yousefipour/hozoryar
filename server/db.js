@@ -160,5 +160,8 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
   if(!shiftColumns.includes('schedule_kind'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_kind TEXT NOT NULL DEFAULT 'fixed'");
   if(!shiftColumns.includes('schedule_json'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_json TEXT NOT NULL DEFAULT '{}'");
   if(!shiftColumns.includes('daily_ot_cap'))db.exec('ALTER TABLE shifts ADD COLUMN daily_ot_cap INTEGER NOT NULL DEFAULT 27 CHECK(daily_ot_cap BETWEEN 0 AND 1440)');
+  const requestColumns=db.prepare('PRAGMA table_info(personnel_requests)').all().map(x=>x.name);
+  if(!requestColumns.includes('end_date'))db.exec('ALTER TABLE personnel_requests ADD COLUMN end_date TEXT');
+  if(!requestColumns.includes('unit'))db.exec("ALTER TABLE personnel_requests ADD COLUMN unit TEXT NOT NULL DEFAULT 'hourly' CHECK(unit IN ('hourly','daily'))");
   return db;
 }

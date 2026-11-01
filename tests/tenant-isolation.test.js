@@ -113,6 +113,26 @@ test('two-step approvals require manager then company owner',async()=>{
   assert.equal((await api('/api/work-report?from=2026-11-03&to=2026-11-03',staff)).body.days[0].mission,120);
 });
 
+test('multi-day mission is approved once, credited each day and blocks archive while pending',async()=>{
+  const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
+  const manager=(await api('/api/login',null,'POST',{company:'alpha',username:'middle',password:'strong-password-123'})).body.token;
+  assert.equal((await api('/api/requests',staff,'POST',{type:'mission',work_date:'2026-08-10',end_date:'2026-08-12',unit:'hourly',minutes:120})).status,400);
+  assert.equal((await api('/api/requests',staff,'POST',{type:'mission',work_date:'2026-08-12',end_date:'2026-08-10',unit:'daily',minutes:480})).status,400);
+  const created=await api('/api/requests',staff,'POST',{type:'mission',work_date:'2026-08-10',end_date:'2026-08-12',unit:'daily',minutes:480});
+  assert.equal(created.status,201);
+  const listing=(await api('/api/requests',staff)).body.items.find(x=>x.id===created.body.id);
+  assert.equal(listing.end_date,'2026-08-12');assert.equal(listing.unit,'daily');
+  assert.equal((await api('/api/work-months/finalize',a,'POST',{month:'2026-08'})).status,409);
+  assert.equal((await api(`/api/requests/${created.body.id}/decision`,manager,'POST',{status:'approved'})).status,200);
+  assert.equal((await api('/api/work-months/finalize',a,'POST',{month:'2026-08'})).status,409);
+  assert.equal((await api(`/api/requests/${created.body.id}/decision`,a,'POST',{status:'approved'})).status,200);
+  const report=await api('/api/work-report?from=2026-08-09&to=2026-08-13',staff);
+  assert.equal(report.status,200);
+  for(const day of ['2026-08-10','2026-08-11','2026-08-12'])assert.equal(report.body.days.find(x=>x.day===day).mission,480);
+  assert.equal(report.body.totals.mission,1440);
+  assert.equal((await api('/api/work-report?from=2026-08-10&to=2026-08-12',b)).body.totals.mission,0);
+});
+
 test('calendar holidays and overnight report remain tenant-scoped',async()=>{
   const created=await api('/api/holidays',a,'POST',{work_date:'2026-11-04',title:'تعطیلی اختصاصی الف'});
   assert.equal(created.status,200);
@@ -259,4 +279,13 @@ test('platform administrator alone can configure per-company subscription and pe
   assert.equal((await api('/api/me',b)).body.subscription.expired,false);
   assert.equal((await api('/api/platform/logout',platform,'POST')).status,200);
   assert.equal((await api('/api/platform/companies',platform)).status,401);
+});
+
+test('advanced shifts validate overlapping segments and remain tenant-owned',async()=>{
+  const base={name:'شیفت دو بخشی',start_time:'08:00',end_time:'17:00',duty_minutes:480,schedule_kind:'advanced'};
+  const invalid=await api('/api/shifts',a,'POST',{...base,schedule:{weekly:{1:[{s:'08:00',e:'12:00'},{s:'11:30',e:'16:00'}]}}});
+  assert.equal(invalid.status,400);
+  const good=await api('/api/shifts',a,'POST',{...base,schedule:{weekly:{1:[{s:'08:00',e:'12:00'},{s:'13:00',e:'17:00'}]}}});
+  assert.equal(good.status,201);
+  assert.equal((await api('/api/assignments',b,'POST',{user_id:2,shift_id:good.body.id})).status,404);
 });

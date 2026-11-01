@@ -48,8 +48,8 @@ function buildWorkReport(companyId,targetId,from,to,official) {
   const sessions=sessionsByEntryDate(rows,from,to);
   const assignment=db.prepare(`SELECT s.duty_minutes,s.daily_ot_cap,s.start_time,s.end_time,s.schedule_kind,s.schedule_json FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
     WHERE a.company_id=? AND a.user_id=?`).get(companyId,targetId);
-  const requests=db.prepare(`SELECT type,work_date,minutes FROM personnel_requests
-    WHERE company_id=? AND user_id=? AND status='approved' AND work_date BETWEEN ? AND ?`).all(companyId,targetId,from,to);
+  const requests=db.prepare(`SELECT type,work_date,COALESCE(end_date,work_date) end_date,minutes FROM personnel_requests
+    WHERE company_id=? AND user_id=? AND status='approved' AND work_date<=? AND COALESCE(end_date,work_date)>=?`).all(companyId,targetId,to,from);
   const manual=new Map(db.prepare('SELECT work_date,title FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(companyId,from,to).map(x=>[x.work_date,x.title]));
   const calendar=calendarDays(from,to,manual,official.days),byDate=new Map(calendar.map(x=>[x.date,x]));
   const days=[],cursor=new Date(from+'T12:00:00Z'),limit=new Date(to+'T12:00:00Z');
@@ -57,7 +57,7 @@ function buildWorkReport(companyId,targetId,from,to,official) {
     const policy=assignment?JSON.parse(assignment.schedule_json||'{}'):{};
     const metrics=attendanceMetrics(assignment,day,parts,policy);
     const classification=byDate.get(day);
-    days.push({...dailyWork({day,...metrics,duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,hasShift:!!assignment,approved:requests.filter(r=>r.work_date===day),holiday:classification.is_official_holiday||classification.is_manual_holiday}),
+    days.push({...dailyWork({day,...metrics,duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,hasShift:!!assignment,approved:requests.filter(r=>r.work_date<=day&&r.end_date>=day),holiday:classification.is_official_holiday||classification.is_manual_holiday}),
       jalali:classification.jalali,is_official_holiday:classification.is_official_holiday,is_manual_holiday:classification.is_manual_holiday,
       holiday_title:classification.title,holiday_source:classification.source});cursor.setUTCDate(cursor.getUTCDate()+1);}
   return {user_id:targetId,from,to,days,totals:sumWork(days),authoritative:false,engine:'hozoryar-work-v5',reference:'Khatyar ShiftCalc rules; independent online calendar',
@@ -177,9 +177,24 @@ async function api(req,res,url) {
     if(!str(b.name)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.start_time)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.end_time)||!Number.isInteger(b.duty_minutes)||b.duty_minutes<0||b.duty_minutes>1440) throw fail(400,'اطلاعات شیفت نامعتبر است');
     const cap=b.daily_ot_cap??27;if(!Number.isInteger(cap)||cap<0||cap>1440)throw fail(400,'سقف اضافه‌کاری روزانه نامعتبر است');
     const kind=b.schedule_kind||'fixed',config=b.schedule||{};
-    if(!['fixed','weekly','rotating','floating'].includes(kind))throw fail(400,'نوع شیفت نامعتبر است');
+    if(!['fixed','weekly','rotating','floating','advanced'].includes(kind))throw fail(400,'نوع شیفت نامعتبر است');
     if(kind==='weekly'&&(!Array.isArray(config.days)||config.days.some(x=>!Number.isInteger(x)||x<0||x>6)||new Set(config.days).size!==config.days.length))throw fail(400,'روزهای شیفت هفتگی نامعتبر است');
     if(kind==='rotating'&&(!Number.isInteger(config.work)||config.work<1||config.work>30||!Number.isInteger(config.rest)||config.rest<1||config.rest>30||!/^\d{4}-\d{2}-\d{2}$/.test(config.anchor||'')||Number.isNaN(Date.parse(config.anchor))))throw fail(400,'چرخه شیفت نامعتبر است');
+    if(kind==='advanced'){
+      if(!config.weekly||typeof config.weekly!=='object'||Array.isArray(config.weekly)||Object.keys(config.weekly).some(day=>!/^[0-6]$/.test(day)))throw fail(400,'تقویم شیفت چندبخشی نامعتبر است');
+      const hm=v=>/^([01]\d|2[0-3]):[0-5]\d$/.test(v||'');
+      for(const items of Object.values(config.weekly)){
+        if(!Array.isArray(items)||items.length>4)throw fail(400,'حداکثر چهار بازه شیفت در روز مجاز است');
+        const intervals=[];
+        for(const item of items){if(!item||!hm(item.s)||!hm(item.e))throw fail(400,'ساعت بازه شیفت نامعتبر است');
+          const [sh,sm]=item.s.split(':').map(Number),[eh,em]=item.e.split(':').map(Number),start=sh*60+sm,rawEnd=eh*60+em;
+          const end=rawEnd<=start?rawEnd+1440:rawEnd;
+          if(end-start>960)throw fail(400,'طول بازه شیفت بیش از ۱۶ ساعت است');
+          intervals.push({start,end});}
+        intervals.sort((a,b)=>a.start-b.start);
+        if(intervals.some((it,i)=>i>0&&it.start<intervals[i-1].end)||intervals.reduce((sum,i)=>sum+i.end-i.start,0)>1440)throw fail(400,'بازه‌های شیفت هم‌پوشانی دارند');
+      }
+    }
     if(['late_ok','early_ok','ot_begin','ot_end'].some(k=>config[k]!==undefined&&(!Number.isInteger(config[k])||config[k]<0||config[k]>360)))throw fail(400,'تلورانس یا پنجره اضافه‌کاری نامعتبر است');
     const result=db.prepare('INSERT INTO shifts(company_id,name,start_time,end_time,duty_minutes,daily_ot_cap,schedule_kind,schedule_json) VALUES(?,?,?,?,?,?,?,?)').run(user.company_id,b.name,b.start_time,b.end_time,b.duty_minutes,cap,kind,JSON.stringify(config));
     audit(user,'shift.create','shift',Number(result.lastInsertRowid));return json(res,201,{id:Number(result.lastInsertRowid)});
@@ -192,10 +207,10 @@ async function api(req,res,url) {
   }
   if(path==='/api/requests' && method==='GET') {
     const mine=url.searchParams.get('scope')==='mine'||user.role==='employee';
-    const items=mine?db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.minutes,r.description,r.status,r.created_at
+    const items=mine?db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.end_date,r.unit,r.minutes,r.description,r.status,r.created_at
       FROM personnel_requests r JOIN users u ON u.id=r.user_id AND u.company_id=r.company_id
       WHERE r.company_id=? AND r.user_id=? ORDER BY r.id DESC LIMIT 200`).all(user.company_id,user.id)
-    :db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.minutes,r.description,r.status,r.created_at
+    :db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.end_date,r.unit,r.minutes,r.description,r.status,r.created_at
       FROM personnel_requests r JOIN users u ON u.id=r.user_id AND u.company_id=r.company_id
       WHERE r.company_id=? ORDER BY r.id DESC LIMIT 200`).all(user.company_id);
     for(const item of items){item.next_stage=db.prepare('SELECT COUNT(*) n FROM request_decisions WHERE company_id=? AND request_id=?').get(user.company_id,item.id).n+1;item.total_steps=settings(user.company_id).approval_steps;}
@@ -203,9 +218,10 @@ async function api(req,res,url) {
   }
   if(path==='/api/requests' && method==='POST') {
     const b=await body(req);
-    if(!['annual_leave','sick_leave','mission'].includes(b.type)||!/^\d{4}-\d{2}-\d{2}$/.test(b.work_date)||Number.isNaN(Date.parse(b.work_date))||!Number.isInteger(b.minutes)||b.minutes<1||b.minutes>1440||(b.description!==undefined&&typeof b.description!=='string')||(b.description||'').length>500) throw fail(400,'اطلاعات درخواست نامعتبر است');
-    const result=db.prepare(`INSERT INTO personnel_requests(company_id,user_id,type,work_date,minutes,description)
-      VALUES(?,?,?,?,?,?)`).run(user.company_id,user.id,b.type,b.work_date,b.minutes,b.description||'');
+    const end=b.end_date||b.work_date,unit=b.unit||'hourly';
+    if(!['annual_leave','sick_leave','mission'].includes(b.type)||!validDay(b.work_date)||!validDay(end)||end<b.work_date||Date.parse(end)-Date.parse(b.work_date)>30*86400000||!['hourly','daily'].includes(unit)||(unit==='hourly'&&end!==b.work_date)||!Number.isInteger(b.minutes)||b.minutes<1||b.minutes>1440||(b.description!==undefined&&typeof b.description!=='string')||(b.description||'').length>500) throw fail(400,'اطلاعات درخواست نامعتبر است');
+    const result=db.prepare(`INSERT INTO personnel_requests(company_id,user_id,type,work_date,end_date,unit,minutes,description)
+      VALUES(?,?,?,?,?,?,?,?)`).run(user.company_id,user.id,b.type,b.work_date,end,unit,b.minutes,b.description||'');
     const id=Number(result.lastInsertRowid);audit(user,'request.create','personnel_request',id);return json(res,201,{id,status:'pending'});
   }
   const decision=/^\/api\/requests\/(\d+)\/decision$/.exec(path);
@@ -317,7 +333,7 @@ async function api(req,res,url) {
     db.exec('BEGIN IMMEDIATE');
     try {
       if(db.prepare('SELECT 1 FROM work_month_archives WHERE company_id=? AND month=?').get(user.company_id,month))throw fail(409,'این ماه قبلاً بایگانی شده و قابل بازنویسی نیست');
-      const pending=db.prepare("SELECT COUNT(*) n FROM personnel_requests WHERE company_id=? AND work_date BETWEEN ? AND ? AND status='pending'").get(user.company_id,from,to).n;
+      const pending=db.prepare("SELECT COUNT(*) n FROM personnel_requests WHERE company_id=? AND work_date<=? AND COALESCE(end_date,work_date)>=? AND status='pending'").get(user.company_id,to,from).n;
       if(pending)throw fail(409,`${pending} درخواست بررسی‌نشده در این ماه وجود دارد`);
       const nextDay=new Date(Date.parse(to)+86400000).toISOString().slice(0,10);
       const open=db.prepare('SELECT COUNT(*) n FROM attendance WHERE company_id=? AND checked_in_at<? AND checked_out_at IS NULL').get(user.company_id,new Date(localInstant(nextDay,0)).toISOString()).n;
