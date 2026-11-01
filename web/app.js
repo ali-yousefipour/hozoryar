@@ -26,9 +26,9 @@ async function authenticate(){const response=await request('/api/me');state.user
 
 async function navigate(view){
   state.view=view;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
-  const titles={dashboard:'داشبورد مدیریتی',attendance:'ثبت حضور من',people:'مدیریت پرسنل',shifts:'شیفت‌های کاری',map:'نقشه زنده نیروها',monitor:'نظارت بر پرسنل',settings:'تنظیمات شرکت'};
+  const titles={dashboard:'داشبورد مدیریتی',attendance:'ثبت حضور من',requests:'مرخصی و مأموریت',report:'گزارش کارکرد',people:'مدیریت پرسنل',shifts:'شیفت‌های کاری',map:'نقشه زنده نیروها',monitor:'نظارت بر پرسنل',settings:'تنظیمات شرکت'};
   $('#page-title').textContent=titles[view]||view;setContent('<div class="card">در حال بارگذاری...</div>');
-  try{if(view==='dashboard')await dashboard();if(view==='attendance')await attendance();if(view==='people')await people();if(view==='shifts')await shifts();if(view==='map')await liveMap();if(view==='monitor')await monitor();if(view==='settings')await settings();}
+  try{if(view==='dashboard')await dashboard();if(view==='attendance')await attendance();if(view==='requests')await requests();if(view==='report')await workReport();if(view==='people')await people();if(view==='shifts')await shifts();if(view==='map')await liveMap();if(view==='monitor')await monitor();if(view==='settings')await settings();}
   catch(e){setContent(card(`<p class="error">${esc(e.message)}</p>`));}
 }
 
@@ -44,6 +44,26 @@ async function people(){const r=await request('/api/users');setContent(`<div cla
 
 async function shifts(){const [a,b]=await Promise.all([request('/api/shifts'),request('/api/users')]);setContent(`<div class="section-head"><h2>شیفت‌های تعریف‌شده</h2></div>${card(`<div class="table-wrap"><table class="table"><thead><tr><th>نام شیفت</th><th>شروع</th><th>پایان</th><th>موظفی</th></tr></thead><tbody>${a.items.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.start_time}</td><td>${s.end_time}</td><td>${fa(s.duty_minutes)} دقیقه</td></tr>`).join('')||'<tr><td colspan="4">شیفتی تعریف نشده است.</td></tr>'}</tbody></table></div>`)}<div class="section-head"><h2>شیفت جدید</h2></div>${form('تعریف شیفت',field('عنوان','name')+field('ساعت شروع','start_time','time')+field('ساعت پایان','end_time','time')+field('موظفی (دقیقه)','duty_minutes','number','min="0" max="1440"'),'shift-form')}<div class="section-head"><h2>تخصیص شیفت</h2></div>${form('انتخاب کارمند و شیفت',`<label>کارمند<select name="user_id">${b.items.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></label><label>شیفت<select name="shift_id">${a.items.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label>`,'assign-form')}`);
   $('#shift-form').onsubmit=guard(async e=>{const b=formData(e.target);b.duty_minutes=Number(b.duty_minutes);await request('/api/shifts','POST',b);toast('شیفت ثبت شد');navigate('shifts');});$('#assign-form').onsubmit=guard(async e=>{const b=formData(e.target);await request('/api/assignments','POST',{user_id:Number(b.user_id),shift_id:Number(b.shift_id)});toast('شیفت تخصیص یافت');});}
+
+const requestTypes={annual_leave:'مرخصی استحقاقی',sick_leave:'مرخصی استعلاجی',mission:'مأموریت'};
+const requestStates={pending:'در انتظار بررسی',approved:'تأیید شده',rejected:'رد شده'};
+async function requests(){const r=await request('/api/requests');const isAdmin=state.user.role!=='employee';
+  setContent(`<div class="section-head"><h2>درخواست‌های پرسنلی</h2><span class="badge">${fa(r.items.length)} درخواست</span></div>${card(`<div class="table-wrap"><table class="table"><thead><tr><th>کارمند</th><th>نوع درخواست</th><th>روز</th><th>مدت</th><th>وضعیت</th>${isAdmin?'<th>بررسی</th>':''}</tr></thead><tbody>${r.items.map(x=>`<tr><td>${esc(x.name)}</td><td>${requestTypes[x.type]}</td><td>${esc(x.work_date)}</td><td>${fa(x.minutes)} دقیقه</td><td><span class="badge ${x.status==='approved'?'ok':''}">${requestStates[x.status]}</span></td>${isAdmin?`<td>${x.status==='pending'&&x.user_id!==state.user.id?`<div class="action-row"><button class="ghost decision" data-id="${x.id}" data-status="approved">تأیید</button><button class="ghost decision" data-id="${x.id}" data-status="rejected">رد</button></div>`:'—'}</td>`:''}</tr>`).join('')||`<tr><td colspan="${isAdmin?6:5}">درخواستی ثبت نشده است.</td></tr>`}</tbody></table></div>`)}<div class="section-head"><h2>ثبت درخواست جدید</h2></div><form class="card stack" id="request-form"><div class="form-grid"><label>نوع درخواست<select name="type"><option value="annual_leave">مرخصی استحقاقی</option><option value="sick_leave">مرخصی استعلاجی</option><option value="mission">مأموریت</option></select></label>${field('تاریخ (میلادی در ورودی اولیه)','work_date','date')}${field('مدت به دقیقه','minutes','number','min="1" max="1440"')}<label>توضیحات<input name="description" maxlength="500" placeholder="توضیح مختصر"></label></div><button class="primary">ارسال برای تأیید</button></form>`);
+  $('#request-form [name=description]').required=false;
+  $('#request-form').onsubmit=guard(async e=>{const b=formData(e.target);b.minutes=Number(b.minutes);await request('/api/requests','POST',b);toast('درخواست ثبت شد');navigate('requests');});
+  document.querySelectorAll('button.decision').forEach(button=>button.onclick=guard(async()=>{await request('/api/requests/'+button.dataset.id+'/decision','POST',{status:button.dataset.status});toast('وضعیت درخواست ثبت شد');navigate('requests');}));
+}
+
+const workFields={worked:'حضور واقعی',expected:'موظفی',leave:'مرخصی',mission:'مأموریت',shortage:'کسری',surplus:'مازاد حضور',friday_work:'جمعه‌کاری',holiday_work:'تعطیل‌کاری',regular_extra:'مازاد روز عادی'};
+const minutes=n=>`${fa(Math.floor(n/60))}:${fa(n%60).padStart(2,'۰')}`;
+async function workReport(){const now=new Date(),today=now.toISOString().slice(0,10),start=today.slice(0,8)+'01',isAdmin=state.user.role!=='employee';let people=[];
+  if(isAdmin)people=(await request('/api/users')).items;
+  setContent(`<form id="report-form" class="card stack"><h3>گزارش کارکرد</h3><div class="form-grid">${field('از تاریخ (میلادی)','from','date')}${field('تا تاریخ (میلادی)','to','date')}${isAdmin?`<label>کارمند<select name="user_id">${people.map(p=>`<option value="${p.id}" ${p.id===state.user.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>`:''}</div><button class="primary">محاسبه گزارش</button></form><div id="report-results" style="margin-top:18px"></div>`);
+  $('#report-form [name=from]').value=start;$('#report-form [name=to]').value=today;
+  $('#report-form').onsubmit=guard(async e=>{const b=formData(e.target),params=new URLSearchParams(b),report=await request('/api/work-report?'+params);
+    $('#report-results').innerHTML=`<div class="note">${esc(report.note)}</div><div class="section-head"><h2>جمع دوره</h2></div><div class="grid">${Object.entries(workFields).map(([key,title])=>card(`<span class="stat-label">${title}</span><div class="stat-value" style="font-size:23px">${minutes(report.totals[key])}</div>`)).join('')}</div><div class="section-head"><h2>جزئیات روزانه</h2></div>${card(`<div class="table-wrap"><table class="table"><thead><tr><th>تاریخ</th><th>حضور</th><th>موظفی</th><th>کسری</th><th>مرخصی</th><th>مأموریت</th><th>جمعه‌کاری</th><th>تعطیل‌کاری</th></tr></thead><tbody>${report.days.map(d=>`<tr><td>${d.day}</td>${['worked','expected','shortage','leave','mission','friday_work','holiday_work'].map(k=>`<td>${minutes(d[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`)}`;
+  });
+}
 
 function tileMap(el,items,provider){
   const lat=items.length?items[0].lat:36.2972,lng=items.length?items[0].lng:59.6067,z=12,size=256;

@@ -68,6 +68,21 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(company_id,actor_user_id) REFERENCES users(company_id,id)
     );
+    CREATE TABLE IF NOT EXISTS personnel_requests (
+      id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('annual_leave','sick_leave','mission')),
+      work_date TEXT NOT NULL, minutes INTEGER NOT NULL CHECK(minutes BETWEEN 1 AND 1440),
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+      decided_by INTEGER, decided_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(company_id,user_id) REFERENCES users(company_id,id),
+      FOREIGN KEY(company_id,decided_by) REFERENCES users(company_id,id)
+    );
+    CREATE INDEX IF NOT EXISTS personnel_requests_company_date ON personnel_requests(company_id,work_date,status);
+    CREATE TABLE IF NOT EXISTS company_holidays (
+      company_id INTEGER NOT NULL REFERENCES companies(id), work_date TEXT NOT NULL,
+      title TEXT NOT NULL, PRIMARY KEY(company_id,work_date)
+    );
   `);
   return db;
 }

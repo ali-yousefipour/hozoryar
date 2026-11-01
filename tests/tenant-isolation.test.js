@@ -67,3 +67,23 @@ test('unauthorized access is blocked',async()=>{
   const login=await api('/api/login',null,'POST',{company:'alpha',username:'admin',password:'wrong'});
   assert.equal(login.status,401);
 });
+
+test('personnel request decisions stay inside their company and affect reports',async()=>{
+  const staffLogin=await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'});
+  assert.equal(staffLogin.status,200);
+  const staff=staffLogin.body.token;
+  const created=await api('/api/requests',staff,'POST',{type:'annual_leave',work_date:'2026-11-02',minutes:120,description:'مرخصی ساعتی'});
+  assert.equal(created.status,201);
+  assert.equal((await api('/api/requests',b)).body.items.length,0);
+  assert.equal((await api(`/api/requests/${created.body.id}/decision`,b,'POST',{status:'approved'})).status,404);
+  assert.equal((await api(`/api/requests/${created.body.id}/decision`,staff,'POST',{status:'approved'})).status,403);
+  assert.equal((await api(`/api/requests/${created.body.id}/decision`,a,'POST',{status:'approved'})).status,200);
+  assert.equal((await api(`/api/requests/${created.body.id}/decision`,a,'POST',{status:'rejected'})).status,409);
+  assert.equal((await api('/api/assignments',a,'POST',{user_id:3,shift_id:1})).status,200);
+  const report=await api('/api/work-report?from=2026-11-02&to=2026-11-02',staff);
+  assert.equal(report.status,200);
+  assert.equal(report.body.days[0].leave,120);
+  assert.equal(report.body.days[0].expected,480);
+  assert.equal(report.body.days[0].shortage,360);
+  assert.equal((await api('/api/work-report?from=2026-11-02&to=2026-11-02&user_id=3',b)).status,404);
+});

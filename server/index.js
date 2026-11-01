@@ -4,6 +4,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './db.js';
 import { issueSession, resolveSession, verifyPassword, revokeSession, passwordHash } from './auth.js';
+import { dailyWork, splitSessions, sumWork, tehranDate } from './work.js';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
 const logo = resolve(fileURLToPath(new URL('../branding/hozoryar-logo.png', import.meta.url)));
@@ -73,6 +74,63 @@ async function api(req,res,url) {
     if(!Number.isInteger(b.user_id)||!Number.isInteger(b.shift_id)||!ownUser(user,b.user_id)||!db.prepare('SELECT id FROM shifts WHERE id=? AND company_id=?').get(b.shift_id,user.company_id)) throw fail(404,'کارمند یا شیفت در این شرکت وجود ندارد');
     db.prepare('INSERT INTO assignments(company_id,user_id,shift_id) VALUES(?,?,?) ON CONFLICT(company_id,user_id) DO UPDATE SET shift_id=excluded.shift_id').run(user.company_id,b.user_id,b.shift_id);
     audit(user,'shift.assign','user',b.user_id);return json(res,200,{ok:true});
+  }
+  if(path==='/api/requests' && method==='GET') {
+    const mine=url.searchParams.get('scope')==='mine'||user.role==='employee';
+    const items=mine?db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.minutes,r.description,r.status,r.created_at
+      FROM personnel_requests r JOIN users u ON u.id=r.user_id AND u.company_id=r.company_id
+      WHERE r.company_id=? AND r.user_id=? ORDER BY r.id DESC LIMIT 200`).all(user.company_id,user.id)
+    :db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.minutes,r.description,r.status,r.created_at
+      FROM personnel_requests r JOIN users u ON u.id=r.user_id AND u.company_id=r.company_id
+      WHERE r.company_id=? ORDER BY r.id DESC LIMIT 200`).all(user.company_id);
+    return json(res,200,{items});
+  }
+  if(path==='/api/requests' && method==='POST') {
+    const b=await body(req);
+    if(!['annual_leave','sick_leave','mission'].includes(b.type)||!/^\d{4}-\d{2}-\d{2}$/.test(b.work_date)||Number.isNaN(Date.parse(b.work_date))||!Number.isInteger(b.minutes)||b.minutes<1||b.minutes>1440||(b.description!==undefined&&typeof b.description!=='string')||(b.description||'').length>500) throw fail(400,'اطلاعات درخواست نامعتبر است');
+    const result=db.prepare(`INSERT INTO personnel_requests(company_id,user_id,type,work_date,minutes,description)
+      VALUES(?,?,?,?,?,?)`).run(user.company_id,user.id,b.type,b.work_date,b.minutes,b.description||'');
+    const id=Number(result.lastInsertRowid);audit(user,'request.create','personnel_request',id);return json(res,201,{id,status:'pending'});
+  }
+  const decision=/^\/api\/requests\/(\d+)\/decision$/.exec(path);
+  if(decision && method==='POST') {
+    admin(user);const id=Number(decision[1]),b=await body(req);
+    if(!['approved','rejected'].includes(b.status)) throw fail(400,'وضعیت نامعتبر است');
+    const target=db.prepare('SELECT id,user_id,status FROM personnel_requests WHERE id=? AND company_id=?').get(id,user.company_id);
+    if(!target)throw fail(404,'درخواست شرکت یافت نشد');
+    if(target.user_id===user.id)throw fail(403,'تأیید درخواست خود مجاز نیست');
+    if(target.status!=='pending')throw fail(409,'این درخواست قبلاً بررسی شده است');
+    db.prepare(`UPDATE personnel_requests SET status=?,decided_by=?,decided_at=? WHERE id=? AND company_id=? AND status='pending'`)
+      .run(b.status,user.id,new Date().toISOString(),id,user.company_id);
+    audit(user,'request.'+b.status,'personnel_request',id);return json(res,200,{ok:true});
+  }
+  if(path==='/api/holidays' && method==='GET') {
+    return json(res,200,{items:db.prepare('SELECT work_date,title FROM company_holidays WHERE company_id=? ORDER BY work_date').all(user.company_id)});
+  }
+  if(path==='/api/holidays' && method==='POST') {
+    owner(user);const b=await body(req);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(b.work_date||'')||Number.isNaN(Date.parse(b.work_date))||!str(b.title,120)) throw fail(400,'تاریخ یا عنوان تعطیلی نامعتبر است');
+    db.prepare('INSERT INTO company_holidays(company_id,work_date,title) VALUES(?,?,?) ON CONFLICT(company_id,work_date) DO UPDATE SET title=excluded.title').run(user.company_id,b.work_date,b.title);
+    audit(user,'holiday.save','company',user.company_id);return json(res,200,{ok:true});
+  }
+  if(path==='/api/work-report' && method==='GET') {
+    const from=url.searchParams.get('from'),to=url.searchParams.get('to');
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(from||'')||!/^\d{4}-\d{2}-\d{2}$/.test(to||'')||from>to||Date.parse(to)-Date.parse(from)>35*86400000) throw fail(400,'بازه گزارش باید حداکثر ۳۵ روز باشد');
+    const targetId=url.searchParams.has('user_id')?Number(url.searchParams.get('user_id')):user.id;
+    if(targetId!==user.id)admin(user);
+    if(!ownUser(user,targetId))throw fail(404,'کارمند یافت نشد');
+    const rows=db.prepare(`SELECT checked_in_at,checked_out_at FROM attendance WHERE company_id=? AND user_id=?
+      AND checked_in_at<=? AND (checked_out_at IS NULL OR checked_out_at>=?) ORDER BY checked_in_at`)
+      .all(user.company_id,targetId,new Date(Date.parse(to)+2*86400000).toISOString(),new Date(Date.parse(from)-2*86400000).toISOString());
+    const sessions=splitSessions(rows,from,to);
+    const assignment=db.prepare(`SELECT s.duty_minutes FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
+       WHERE a.company_id=? AND a.user_id=?`).get(user.company_id,targetId);
+    const requests=db.prepare(`SELECT type,work_date,minutes FROM personnel_requests
+       WHERE company_id=? AND user_id=? AND status='approved' AND work_date BETWEEN ? AND ?`).all(user.company_id,targetId,from,to);
+    const holidays=new Set(db.prepare('SELECT work_date FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(user.company_id,from,to).map(x=>x.work_date));
+    const days=[],cursor=new Date(from+'T12:00:00Z'),limit=new Date(to+'T12:00:00Z');
+    while(cursor<=limit){const day=cursor.toISOString().slice(0,10);days.push(dailyWork({day,worked:sessions.get(day)||0,duty:assignment?.duty_minutes||0,approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
+    return json(res,200,{user_id:targetId,from,to,days,totals:sumWork(days),note:'محاسبات نسخه پایه: موظفی شیفت روزانه، تعطیلات دستی و جمعه؛ بدون تقویم رسمی، سقف اضافه‌کاری و قواعد پیشرفته خطیار.'});
   }
   if (path==='/api/settings' && method==='GET') {
     owner(user);const s=settings(user.company_id);
