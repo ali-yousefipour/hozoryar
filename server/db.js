@@ -103,6 +103,10 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       company_id INTEGER NOT NULL REFERENCES companies(id), work_date TEXT NOT NULL,
       title TEXT NOT NULL, PRIMARY KEY(company_id,work_date)
     );
+    CREATE TABLE IF NOT EXISTS official_calendar_years (
+      jalali_year INTEGER PRIMARY KEY, payload_json TEXT NOT NULL,
+      fetched_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS work_month_archives (
       company_id INTEGER NOT NULL REFERENCES companies(id), month TEXT NOT NULL,
       snapshot_json TEXT NOT NULL, created_by INTEGER NOT NULL,

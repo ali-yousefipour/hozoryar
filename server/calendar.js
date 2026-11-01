@@ -1,5 +1,4 @@
 import { isFriday } from './work.js';
-import { referenceHoliday, hasReferenceYear } from './official-holidays.js';
 
 const persian=new Intl.DateTimeFormat('en-US-u-ca-persian',{timeZone:'Asia/Tehran',calendar:'persian',year:'numeric',month:'2-digit',day:'2-digit'});
 const weekday=new Intl.DateTimeFormat('fa-IR',{timeZone:'Asia/Tehran',weekday:'long'});
@@ -19,15 +18,15 @@ export function jalaliMonthBounds(month){
   }
   return from?{from,to}:null;
 }
-export function calendarDays(from,to,manualHolidays=new Map()) {
+export function calendarDays(from,to,manualHolidays=new Map(),officialHolidays=new Map()) {
   const days=[],cursor=new Date(from+'T12:00:00Z'),last=new Date(to+'T12:00:00Z');
   while(cursor<=last){const date=cursor.toISOString().slice(0,10),manual=manualHolidays.get(date)||null;
-    const jalali=jalaliDate(date),official=referenceHoliday(jalali),friday=isFriday(date);
+    const jalali=jalaliDate(date),official=officialHolidays.get(date)||null,friday=isFriday(date);
     days.push({date,jalali,weekday:weekday.format(cursor),is_friday:friday,is_manual_holiday:!!manual,
       is_official_holiday:!!official,is_holiday:!!manual||!!official||friday,
-      title:[official,manual].filter(Boolean).join(' | '),
-      source:official&&manual?'official-reference+manual':official?'official-reference':manual?'manual':'calculated',
-      official_reference_available:hasReferenceYear(jalali.slice(0,4))});
+      title:[official?.title,manual].filter(Boolean).join(' | '),
+      source:official&&manual?'official-online+manual':official?'official-online':manual?'manual':'calculated',
+      official_estimated:!!official?.estimated});
     cursor.setUTCDate(cursor.getUTCDate()+1);
   }
   return days;

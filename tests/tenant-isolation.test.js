@@ -17,6 +17,8 @@ for (const [name,slug] of [['شرکت الف','alpha'],['شرکت ب','beta']]) 
   db.prepare('INSERT INTO company_settings(company_id) VALUES(?)').run(id);
 }
 db.prepare('INSERT INTO platform_admins(username,name,password_hash) VALUES(?,?,?)').run('root','مدیر مرکزی',passwordHash('platform-strong-pass-123'));
+db.prepare('INSERT INTO official_calendar_years(jalali_year,payload_json,fetched_at) VALUES(?,?,?)').run(1405,
+  JSON.stringify({days:{'2026-03-21':{title:'نوروز',estimated:false},'2026-06-05':{title:'قیام ۱۵ خرداد',estimated:false}},estimated:false}),new Date().toISOString());
 db.close();
 const { createServer }=await import('../server/index.js');
 const server=createServer();
@@ -129,12 +131,12 @@ test('calendar holidays and overnight report remain tenant-scoped',async()=>{
   assert.equal((await api('/api/work-report?from=2026-10-20&to=2026-10-21',b)).body.totals.worked,0);
 });
 
-test('official-reference day is used in work reporting and Friday is not double-counted',async()=>{
+test('online cached holiday is used in work reporting and Friday is not double-counted',async()=>{
   const date='2026-03-21';
   const calendar=await api('/api/calendar?from='+date+'&to='+date,a);
   assert.equal(calendar.status,200);
-  assert.equal(calendar.body.official_reference_available,true);
-  assert.equal(calendar.body.official_calendar_available,false);
+  assert.equal(calendar.body.official_calendar_available,true);
+  assert.equal(calendar.body.official_calendar_stale,false);
   assert.equal(calendar.body.days[0].is_official_holiday,true);
   const inserted=openDatabase(process.env.DB_PATH);
   inserted.prepare('INSERT INTO attendance(company_id,user_id,checked_in_at,checked_out_at) VALUES(?,?,?,?)')
@@ -145,7 +147,7 @@ test('official-reference day is used in work reporting and Friday is not double-
   assert.equal(report.body.days[0].holiday_work,60);
   assert.equal(report.body.days[0].friday_work,0);
   assert.equal(report.body.days[0].is_official_holiday,true);
-  assert.equal(report.body.days[0].holiday_source,'official-reference');
+  assert.equal(report.body.days[0].holiday_source,'official-online');
   assert.equal(report.body.authoritative,false);
   assert.equal((await api('/api/work-report?from='+date+'&to='+date,b)).body.days[0].worked,0);
   const fridayDb=openDatabase(process.env.DB_PATH);

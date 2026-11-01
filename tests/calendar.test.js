@@ -17,16 +17,13 @@ test('manual holidays and Friday are independent classifications',()=>{
   assert.equal(days[1].is_holiday,false);
   assert.equal(days[0].is_official_holiday,false);
 });
-test('Khatyar official reference holidays carry provenance and combine with company manual holidays',()=>{
-  const days=calendarDays('2026-03-21','2026-03-22',new Map([['2026-03-21','تعطیلی داخلی شرکت']]));
+test('online official holidays carry provenance and combine with company manual holidays',()=>{
+  const days=calendarDays('2026-03-21','2026-03-22',new Map([['2026-03-21','تعطیلی داخلی شرکت']]),new Map([['2026-03-21',{title:'نوروز',estimated:false}]]));
   assert.equal(days[0].jalali,'1405-01-01');
   assert.equal(days[0].is_official_holiday,true);
   assert.equal(days[0].is_manual_holiday,true);
-  assert.equal(days[0].source,'official-reference+manual');
+  assert.equal(days[0].source,'official-online+manual');
   assert.match(days[0].title,/نوروز/);
   assert.match(days[0].title,/تعطیلی داخلی شرکت/);
-  assert.equal(days[0].official_reference_available,true);
-  const unsupported=calendarDays('2027-03-21','2027-03-21');
-  assert.equal(unsupported[0].official_reference_available,false);
-  assert.equal(unsupported[0].is_official_holiday,false);
+  assert.equal(days[0].official_estimated,false);
 });
