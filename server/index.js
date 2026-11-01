@@ -8,6 +8,7 @@ import { attendanceMetrics, dailyWork, dutyForDay, localInstant, sessionsByEntry
 import { calendarDays, jalaliMonthBounds } from './calendar.js';
 import { loadOfficialCalendar } from './official-calendar.js';
 import { archivedWorkXlsx } from './xlsx.js';
+import { annualLeaveByYear } from './leave-balance.js';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
 const logo = resolve(fileURLToPath(new URL('../branding/hozoryar-logo.png', import.meta.url)));
@@ -41,6 +42,12 @@ async function body(req) {
 const str = (v,max=120) => typeof v==='string' && v.trim().length>0 && v.trim().length<=max;
 const ownUser = (user,id) => db.prepare('SELECT id,name,role,active FROM users WHERE id=? AND company_id=?').get(id,user.company_id);
 const validDay = s => /^\d{4}-\d{2}-\d{2}$/.test(s||'') && !Number.isNaN(Date.parse(s)) && new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
+function annualLeaveBalance(companyId,userId,year,excludingId=0){
+  const requests=db.prepare(`SELECT type,work_date,end_date,minutes FROM personnel_requests
+    WHERE company_id=? AND user_id=? AND type='annual_leave' AND status='approved' AND id<>?`).all(companyId,userId,excludingId);
+  const used=annualLeaveByYear(requests).get(year)||0,quota=settings(companyId).annual_leave_minutes;
+  return {year,quota_minutes:quota,used_minutes:used,remaining_minutes:quota-used};
+}
 function buildWorkReport(companyId,targetId,from,to,official) {
   const rows=db.prepare(`SELECT checked_in_at,checked_out_at FROM attendance WHERE company_id=? AND user_id=?
     AND checked_in_at<=? AND (checked_out_at IS NULL OR checked_out_at>=?) ORDER BY checked_in_at`)
@@ -216,6 +223,12 @@ async function api(req,res,url) {
     for(const item of items){item.next_stage=db.prepare('SELECT COUNT(*) n FROM request_decisions WHERE company_id=? AND request_id=?').get(user.company_id,item.id).n+1;item.total_steps=settings(user.company_id).approval_steps;}
     return json(res,200,{items});
   }
+  if(path==='/api/leave-balance' && method==='GET'){
+    const year=Number(url.searchParams.get('year')),targetId=Number(url.searchParams.get('user_id')||user.id);
+    if(!Number.isInteger(year)||year<1300||year>1499||!Number.isInteger(targetId)||!ownUser(user,targetId))throw fail(400,'سال شمسی یا کاربر نامعتبر است');
+    if(targetId!==user.id)admin(user);
+    return json(res,200,annualLeaveBalance(user.company_id,targetId,year));
+  }
   if(path==='/api/requests' && method==='POST') {
     const b=await body(req);
     const end=b.end_date||b.work_date,unit=b.unit||'hourly';
@@ -230,7 +243,7 @@ async function api(req,res,url) {
     if(!['approved','rejected'].includes(b.status)) throw fail(400,'وضعیت نامعتبر است');
     db.exec('BEGIN IMMEDIATE');
     try {
-      const target=db.prepare('SELECT id,user_id,status FROM personnel_requests WHERE id=? AND company_id=?').get(id,user.company_id);
+      const target=db.prepare('SELECT id,user_id,status,type,work_date,end_date,minutes FROM personnel_requests WHERE id=? AND company_id=?').get(id,user.company_id);
       if(!target)throw fail(404,'درخواست شرکت یافت نشد');
       if(target.user_id===user.id)throw fail(403,'تأیید درخواست خود مجاز نیست');
       if(target.status!=='pending')throw fail(409,'این درخواست قبلاً بررسی شده است');
@@ -241,6 +254,11 @@ async function api(req,res,url) {
         const managers=db.prepare(`SELECT COUNT(*) n FROM users WHERE company_id=? AND role='manager' AND active=1`).get(user.company_id).n;
         if(step===1 && user.role!=='manager' && !(user.role==='owner'&&managers===0))throw fail(403,'مرحله اول تأیید با مدیر میانی است');
         if(step===2 && user.role!=='owner')throw fail(403,'مرحله نهایی تأیید با مدیر شرکت است');
+      }
+      if(b.status==='approved'&&step===totalSteps&&target.type==='annual_leave'){
+        const next=annualLeaveByYear([target]);
+        for(const [year,minutes] of next){const balance=annualLeaveBalance(user.company_id,target.user_id,year,id);
+          if(minutes>balance.remaining_minutes)throw fail(409,`مانده مرخصی استحقاقی سال ${year} کافی نیست`);}
       }
       db.prepare('INSERT INTO request_decisions(company_id,request_id,stage,actor_user_id,outcome) VALUES(?,?,?,?,?)').run(user.company_id,id,step,user.id,b.status);
       const finalStatus=b.status==='rejected'?'rejected':step===totalSteps?'approved':'pending';
@@ -352,7 +370,7 @@ async function api(req,res,url) {
   }
   if (path==='/api/settings' && method==='GET') {
     owner(user);const s=settings(user.company_id);
-    return json(res,200,{map_provider:s.map_provider,sms_provider:s.sms_provider,require_location:!!s.require_location,geofence_lat:s.geofence_lat,geofence_lng:s.geofence_lng,geofence_radius_m:s.geofence_radius_m,approval_steps:s.approval_steps,features:JSON.parse(s.features_json),neshan_key_configured:!!s.neshan_api_key,sms_key_configured:!!s.sms_api_key});
+    return json(res,200,{map_provider:s.map_provider,sms_provider:s.sms_provider,require_location:!!s.require_location,geofence_lat:s.geofence_lat,geofence_lng:s.geofence_lng,geofence_radius_m:s.geofence_radius_m,approval_steps:s.approval_steps,annual_leave_minutes:s.annual_leave_minutes,features:JSON.parse(s.features_json),neshan_key_configured:!!s.neshan_api_key,sms_key_configured:!!s.sms_api_key});
   }
   if (path==='/api/settings' && method==='PATCH') {
     owner(user);const b=await body(req);const s=settings(user.company_id);
@@ -364,10 +382,11 @@ async function api(req,res,url) {
     if(b.geofence_lng!==undefined && b.geofence_lng!==null && (!Number.isFinite(b.geofence_lng)||Math.abs(b.geofence_lng)>180)) throw fail(400,'طول جغرافیایی نامعتبر است');
     if(b.geofence_radius_m!==undefined && (!Number.isInteger(b.geofence_radius_m)||b.geofence_radius_m<50||b.geofence_radius_m>50000)) throw fail(400,'شعاع نامعتبر است');
     if(b.approval_steps!==undefined && ![1,2].includes(b.approval_steps))throw fail(400,'تعداد مراحل تأیید نامعتبر است');
+    if(b.annual_leave_minutes!==undefined&&(!Number.isInteger(b.annual_leave_minutes)||b.annual_leave_minutes<0||b.annual_leave_minutes>525600))throw fail(400,'سقف سالانه مرخصی نامعتبر است');
     const f=b.features===undefined?JSON.parse(s.features_json):b.features;
     if(!f||typeof f!=='object'||Array.isArray(f)||Object.keys(f).some(k=>!['liveMap','attendance','monitoring','shifts','sms'].includes(k))||Object.values(f).some(v=>typeof v!=='boolean')) throw fail(400,'تنظیمات قابلیت‌ها نامعتبر است');
-    db.prepare(`UPDATE company_settings SET map_provider=?,neshan_api_key=?,sms_provider=?,sms_api_key=?,require_location=?,geofence_lat=?,geofence_lng=?,geofence_radius_m=?,approval_steps=?,features_json=? WHERE company_id=?`)
-      .run(b.map_provider??s.map_provider,b.neshan_api_key===undefined?s.neshan_api_key:b.neshan_api_key,b.sms_provider??s.sms_provider,b.sms_api_key===undefined?s.sms_api_key:b.sms_api_key,b.require_location===undefined?s.require_location:Number(!!b.require_location),b.geofence_lat===undefined?s.geofence_lat:b.geofence_lat,b.geofence_lng===undefined?s.geofence_lng:b.geofence_lng,b.geofence_radius_m??s.geofence_radius_m,b.approval_steps??s.approval_steps,JSON.stringify(f),user.company_id);
+    db.prepare(`UPDATE company_settings SET map_provider=?,neshan_api_key=?,sms_provider=?,sms_api_key=?,require_location=?,geofence_lat=?,geofence_lng=?,geofence_radius_m=?,approval_steps=?,annual_leave_minutes=?,features_json=? WHERE company_id=?`)
+      .run(b.map_provider??s.map_provider,b.neshan_api_key===undefined?s.neshan_api_key:b.neshan_api_key,b.sms_provider??s.sms_provider,b.sms_api_key===undefined?s.sms_api_key:b.sms_api_key,b.require_location===undefined?s.require_location:Number(!!b.require_location),b.geofence_lat===undefined?s.geofence_lat:b.geofence_lat,b.geofence_lng===undefined?s.geofence_lng:b.geofence_lng,b.geofence_radius_m??s.geofence_radius_m,b.approval_steps??s.approval_steps,b.annual_leave_minutes??s.annual_leave_minutes,JSON.stringify(f),user.company_id);
     audit(user,'settings.update','company',user.company_id);return json(res,200,{ok:true});
   }
   if (path==='/api/attendance' && method==='POST') {

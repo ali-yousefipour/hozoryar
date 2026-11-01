@@ -133,6 +133,56 @@ test('multi-day mission is approved once, credited each day and blocks archive w
   assert.equal((await api('/api/work-report?from=2026-08-10&to=2026-08-12',b)).body.totals.mission,0);
 });
 
+test('annual leave quota is company-specific, checked at final approval and employee-visible',async()=>{
+  const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
+  const manager=(await api('/api/login',null,'POST',{company:'alpha',username:'middle',password:'strong-password-123'})).body.token;
+  assert.equal((await api('/api/settings',a,'PATCH',{annual_leave_minutes:240})).status,200);
+  assert.equal((await api('/api/settings',b)).body.annual_leave_minutes,12480);
+  const original=await api('/api/leave-balance?year=1405',staff);
+  assert.equal(original.status,200);assert.equal(original.body.used_minutes,120);assert.equal(original.body.remaining_minutes,120);
+  assert.equal((await api('/api/leave-balance?year=1405&user_id=1',staff)).status,403);
+  const request=await api('/api/requests',staff,'POST',{type:'annual_leave',work_date:'2026-12-02',minutes:121});
+  assert.equal(request.status,201);
+  const route=`/api/requests/${request.body.id}/decision`;
+  assert.equal((await api(route,manager,'POST',{status:'approved'})).status,200);
+  assert.equal((await api(route,a,'POST',{status:'approved'})).status,409);
+  assert.equal((await api('/api/requests',staff)).body.items.find(x=>x.id===request.body.id).status,'pending');
+  assert.equal((await api(route,a,'POST',{status:'rejected'})).status,200);
+  const allowed=await api('/api/requests',staff,'POST',{type:'annual_leave',work_date:'2026-12-03',minutes:120});
+  assert.equal(allowed.status,201);
+  assert.equal((await api(`/api/requests/${allowed.body.id}/decision`,manager,'POST',{status:'approved'})).status,200);
+  assert.equal((await api(`/api/requests/${allowed.body.id}/decision`,a,'POST',{status:'approved'})).status,200);
+  assert.equal((await api('/api/leave-balance?year=1405',staff)).body.remaining_minutes,0);
+  assert.equal((await api('/api/settings',a,'PATCH',{annual_leave_minutes:12480})).status,200);
+});
+
+test('Neshan and Kavenegar gateways use tenant secrets server-side without exposing keys',async()=>{
+  assert.equal((await api('/api/settings',a,'PATCH',{map_provider:'neshan',neshan_api_key:'test-neshan-secret',sms_provider:'kavenegar',sms_api_key:'test-sms-secret',features:{liveMap:true,attendance:true,monitoring:true,shifts:true,sms:true}})).status,200);
+  const originalFetch=globalThis.fetch,calls=[];
+  globalThis.fetch=(url,opts)=>{
+    if(typeof url==='string'&&url.startsWith('https://api.neshan.org/')){
+      calls.push({provider:'neshan',url,header:opts.headers['Api-Key']});
+      return Promise.resolve(new Response(Uint8Array.from([137,80,78,71]),{status:200,headers:{'content-type':'image/png'}}));
+    }
+    if(typeof url==='string'&&url.startsWith('https://api.kavenegar.com/')){
+      calls.push({provider:'kavenegar',url,body:opts.body.toString()});
+      return Promise.resolve(Response.json({return:{status:200}}));
+    }
+    return originalFetch(url,opts);
+  };
+  try {
+    const map=await originalFetch(origin+'/api/neshan-tiles/1/1/1',{headers:{Authorization:'Bearer '+a}});
+    assert.equal(map.status,200);assert.equal(map.headers.get('content-type'),'image/png');
+    assert.equal((await api('/api/sms/send',a,'POST',{mobile:'09123456789',message:'آزمون حضوریار'})).status,200);
+    assert.equal((await api('/api/sms/send',b,'POST',{mobile:'09123456789',message:'نباید ارسال شود'})).status,403);
+    assert.equal(calls.length,2);assert.equal(calls[0].header,'test-neshan-secret');
+    assert.equal(calls[1].body.includes('receptor=09123456789'),true);
+    assert.equal(calls[1].url.includes('test-sms-secret'),true);
+    assert.equal(JSON.stringify((await api('/api/settings',a)).body).includes('test-neshan-secret'),false);
+    assert.equal(JSON.stringify((await api('/api/settings',a)).body).includes('test-sms-secret'),false);
+  } finally {globalThis.fetch=originalFetch;}
+});
+
 test('calendar holidays and overnight report remain tenant-scoped',async()=>{
   const created=await api('/api/holidays',a,'POST',{work_date:'2026-11-04',title:'تعطیلی اختصاصی الف'});
   assert.equal(created.status,200);

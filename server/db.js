@@ -79,6 +79,7 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       geofence_radius_m INTEGER NOT NULL DEFAULT 300,
       require_location INTEGER NOT NULL DEFAULT 1,
       approval_steps INTEGER NOT NULL DEFAULT 1 CHECK(approval_steps IN (1,2)),
+      annual_leave_minutes INTEGER NOT NULL DEFAULT 12480 CHECK(annual_leave_minutes BETWEEN 0 AND 525600),
       features_json TEXT NOT NULL DEFAULT '{"liveMap":true,"attendance":true,"monitoring":true,"shifts":true,"sms":false}'
     );
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -156,6 +157,7 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       COMMIT;`);
   }
   if(!settingColumns.includes('approval_steps'))db.exec('ALTER TABLE company_settings ADD COLUMN approval_steps INTEGER NOT NULL DEFAULT 1 CHECK(approval_steps IN (1,2))');
+  if(!settingColumns.includes('annual_leave_minutes'))db.exec('ALTER TABLE company_settings ADD COLUMN annual_leave_minutes INTEGER NOT NULL DEFAULT 12480 CHECK(annual_leave_minutes BETWEEN 0 AND 525600)');
   const shiftColumns=db.prepare('PRAGMA table_info(shifts)').all().map(x=>x.name);
   if(!shiftColumns.includes('schedule_kind'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_kind TEXT NOT NULL DEFAULT 'fixed'");
   if(!shiftColumns.includes('schedule_json'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_json TEXT NOT NULL DEFAULT '{}'");
