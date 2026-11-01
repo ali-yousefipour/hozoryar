@@ -24,6 +24,8 @@ try {
     $stmt = $pdo->prepare('INSERT INTO companies(name,slug) VALUES(?,?)');
     $stmt->execute([$name, $slug]);
     $id = (int)$pdo->lastInsertId();
+    Db::run('INSERT INTO company_settings(company_id,features_json) VALUES(?,?)',
+        [$id, json_encode(['attendance'=>true,'shifts'=>true,'liveMap'=>true,'monitoring'=>true,'sms'=>false])]);
     Db::run("INSERT INTO users(company_id,name,username,password_hash,role) VALUES(?,?,?,?,'owner')",
         [$id, $owner, $username, password_hash($password, PASSWORD_DEFAULT)]);
     $pdo->commit();
