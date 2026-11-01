@@ -1,0 +1,24 @@
+:root {
+  --hz-primary: #6D28D9;
+  --hz-primary-dark: #4C1D95;
+  --hz-primary-light: #8B5CF6;
+  --hz-lavender-surface: #F5F3FF;
+  --hz-lavender-border: #DDD6FE;
+  --hz-text: #1F1633;
+  --hz-surface: #FFFFFF;
+  --hz-success: #15803D;
+  --hz-danger: #B91C1C;
+  --hz-radius-card: 16px;
+  --hz-radius-control: 12px;
+  --hz-font: "Vazirmatn", sans-serif;
+}
+
+[data-theme="dark"] {
+  --hz-primary: #C4B5FD;
+  --hz-primary-dark: #A78BFA;
+  --hz-primary-light: #DDD6FE;
+  --hz-lavender-surface: #1B1033;
+  --hz-lavender-border: #49336C;
+  --hz-text: #F8F7FF;
+  --hz-surface: #281746;
+}
