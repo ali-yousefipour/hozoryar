@@ -9,6 +9,7 @@ import { calendarDays, jalaliMonthBounds } from './calendar.js';
 import { loadOfficialCalendar } from './official-calendar.js';
 import { archivedWorkXlsx } from './xlsx.js';
 import { annualLeaveByYear } from './leave-balance.js';
+import { payrollPreview, snapshotDigest } from './payroll.js';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
 const logo = resolve(fileURLToPath(new URL('../branding/hozoryar-logo.png', import.meta.url)));
@@ -295,8 +296,10 @@ async function api(req,res,url) {
   }
   if(path==='/api/work-months' && method==='GET') {
     admin(user);
-    const items=db.prepare(`SELECT a.month,a.created_at,a.created_by,COALESCE(r.status,'pending_review') review_status
+    const items=db.prepare(`SELECT a.month,a.created_at,a.created_by,COALESCE(r.status,'pending_review') review_status,
+      CASE WHEN f.month IS NULL THEN 0 ELSE 1 END finance_confirmed
       FROM work_month_archives a LEFT JOIN work_month_reviews r ON r.company_id=a.company_id AND r.month=a.month
+      LEFT JOIN work_month_finance f ON f.company_id=a.company_id AND f.month=a.month
       WHERE a.company_id=? ORDER BY a.month DESC LIMIT 36`).all(user.company_id);
     return json(res,200,{items});
   }
@@ -314,11 +317,44 @@ async function api(req,res,url) {
   if(archiveMatch && method==='GET') {
     admin(user);const month=archiveMatch[0].split('/').at(-1);monthBounds(month);
     const row=db.prepare(`SELECT a.snapshot_json,a.created_at,a.created_by,COALESCE(r.status,'pending_review') review_status,
-      r.reviewer_user_id,r.reviewed_at,r.approver_user_id,r.approved_at
+      r.reviewer_user_id,r.reviewed_at,r.approver_user_id,r.approved_at,
+      f.snapshot_sha256 finance_digest,f.include_surplus finance_include_surplus,f.confirmed_by finance_confirmed_by,f.confirmed_at finance_confirmed_at,f.payroll_json finance_record
       FROM work_month_archives a LEFT JOIN work_month_reviews r ON r.company_id=a.company_id AND r.month=a.month
+      LEFT JOIN work_month_finance f ON f.company_id=a.company_id AND f.month=a.month
       WHERE a.company_id=? AND a.month=?`).get(user.company_id,month);
     if(!row)throw fail(404,'بایگانی این ماه وجود ندارد');
-    const {snapshot_json,...meta}=row;return json(res,200,{...JSON.parse(snapshot_json),...meta});
+    const {snapshot_json,finance_record,...meta}=row;return json(res,200,{...JSON.parse(snapshot_json),...meta,
+      finance_record:finance_record?JSON.parse(finance_record):null,
+      finance_integrity_ok:row.finance_digest?snapshotDigest(snapshot_json)===row.finance_digest:null});
+  }
+  const financeMatch=/^\/api\/work-months\/((?:j-)?\d{4}-\d{2})\/(payroll-preview|finance-confirm)$/.exec(path);
+  if(financeMatch && (method==='GET'||method==='POST')){
+    admin(user);const [,month,action]=financeMatch;monthBounds(month);
+    if((action==='payroll-preview'&&method!=='GET')||(action==='finance-confirm'&&method!=='POST'))throw fail(405,'روش نامعتبر است');
+    if(action==='finance-confirm')owner(user);
+    const input=method==='POST'?await body(req):{include_surplus:url.searchParams.get('include_surplus')==='1'};
+    if(typeof input.include_surplus!=='boolean')throw fail(400,'سیاست مازاد حضور باید مشخص باشد');
+    if(action==='finance-confirm'&&(input.confirm!==true||!str(input.note,500)))throw fail(400,'تأیید صریح و توضیح مالی الزامی است');
+    if(action==='finance-confirm')db.exec('BEGIN IMMEDIATE');
+    try{
+      const row=db.prepare(`SELECT a.snapshot_json,r.status review_status FROM work_month_archives a
+        LEFT JOIN work_month_reviews r ON r.company_id=a.company_id AND r.month=a.month
+        WHERE a.company_id=? AND a.month=?`).get(user.company_id,month);
+      if(!row)throw fail(404,'بایگانی یافت نشد');
+      const snapshot=JSON.parse(row.snapshot_json),preview=payrollPreview(snapshot,input.include_surplus),sha=snapshotDigest(row.snapshot_json);
+      if(action==='finance-confirm'){
+        if(row.review_status!=='approved')throw fail(409,'ابتدا تأیید مدیریتی لازم است');
+        if(snapshot.official_calendar_stale||snapshot.official_calendar_estimated)throw fail(409,'تقویم رسمی این بایگانی نیازمند بازبینی است');
+        if(db.prepare('SELECT 1 FROM work_month_finance WHERE company_id=? AND month=?').get(user.company_id,month))throw fail(409,'تأیید مالی این ماه قبلاً ثبت شده است');
+        db.prepare(`INSERT INTO work_month_finance(company_id,month,snapshot_sha256,include_surplus,payroll_json,confirmed_by)
+          VALUES(?,?,?,?,?,?)`).run(user.company_id,month,sha,Number(input.include_surplus),JSON.stringify({note:input.note,items:preview}),user.id);
+        audit(user,'work_month.finance_confirm','work_month',null);
+        db.exec('COMMIT');return json(res,201,{ok:true,month,financially_confirmed:true,snapshot_sha256:sha,authoritative:false});
+      }
+      return json(res,200,{month,include_surplus:input.include_surplus,items:preview,snapshot_sha256:sha,
+        financially_confirmed:!!db.prepare('SELECT 1 FROM work_month_finance WHERE company_id=? AND month=?').get(user.company_id,month),
+        note:'مبنای محاسبه دقیقه کارکرد است؛ محاسبه مبلغ حقوق، کسورات بیمه و مالیات در این نسخه انجام نمی‌شود.'});
+    }catch(e){if(action==='finance-confirm')db.exec('ROLLBACK');throw e;}
   }
   const reviewMatch=/^\/api\/work-months\/((?:j-)?\d{4}-\d{2})\/(review|approve)$/.exec(path);
   if(reviewMatch&&method==='POST'){

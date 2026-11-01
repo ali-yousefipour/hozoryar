@@ -133,6 +133,15 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       FOREIGN KEY(company_id,reviewer_user_id) REFERENCES users(company_id,id),
       FOREIGN KEY(company_id,approver_user_id) REFERENCES users(company_id,id)
     );
+    CREATE TABLE IF NOT EXISTS work_month_finance (
+      company_id INTEGER NOT NULL, month TEXT NOT NULL,
+      snapshot_sha256 TEXT NOT NULL, include_surplus INTEGER NOT NULL CHECK(include_surplus IN (0,1)),
+      payroll_json TEXT NOT NULL, confirmed_by INTEGER NOT NULL,
+      confirmed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(company_id,month),
+      FOREIGN KEY(company_id,month) REFERENCES work_month_archives(company_id,month),
+      FOREIGN KEY(company_id,confirmed_by) REFERENCES users(company_id,id)
+    );
   `);
   // Existing 0.1/0.2 databases are upgraded in place without touching tenant data.
   const settingColumns=db.prepare('PRAGMA table_info(company_settings)').all().map(x=>x.name);

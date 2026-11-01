@@ -306,6 +306,29 @@ test('archived work reports receive separate manager review and owner approval, 
   assert.equal((await fetch(origin+path+'/xlsx',{headers:{Authorization:'Bearer '+b}})).status,404);
 });
 
+test('financial signoff requires owner and managerial approval and locks a digest of archived minutes',async()=>{
+  const path='/api/work-months/j-1405-07';
+  const manager=(await api('/api/login',null,'POST',{company:'alpha',username:'middle',password:'strong-password-123'})).body.token;
+  const preview=await api(path+'/payroll-preview',a);
+  assert.equal(preview.status,200);assert.equal(preview.body.items.length,3);
+  assert.equal(preview.body.items[0].payable_minutes>=0,true);
+  assert.equal((await api(path+'/payroll-preview',b)).status,404);
+  const payload={include_surplus:false,confirm:true,note:'بررسی سند مالی ۱۴۰۵/۰۷'};
+  assert.equal((await api('/api/work-months/2026-10/finance-confirm',a,'POST',payload)).status,409);
+  assert.equal((await api(path+'/finance-confirm',manager,'POST',payload)).status,403);
+  assert.equal((await api(path+'/finance-confirm',a,'POST',{include_surplus:false,confirm:false,note:'اشتباه'})).status,400);
+  const confirmed=await api(path+'/finance-confirm',a,'POST',payload);
+  assert.equal(confirmed.status,201);assert.equal(confirmed.body.financially_confirmed,true);
+  assert.equal(confirmed.body.authoritative,false);
+  assert.equal((await api(path+'/finance-confirm',a,'POST',payload)).status,409);
+  const details=(await api(path,a)).body;
+  assert.equal(details.finance_integrity_ok,true);
+  assert.equal(details.finance_record.items.length,3);
+  assert.equal(details.finance_digest,confirmed.body.snapshot_sha256);
+  assert.equal((await api('/api/work-months',a)).body.items.find(x=>x.month==='j-1405-07').finance_confirmed,1);
+  assert.equal((await api(path,b)).status,404);
+});
+
 test('platform administrator alone can configure per-company subscription and personnel quota',async()=>{
   const login=await api('/api/platform/login',null,'POST',{username:'root',password:'platform-strong-pass-123'});
   assert.equal(login.status,200);const platform=login.body.token;
