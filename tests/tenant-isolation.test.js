@@ -127,3 +127,35 @@ test('calendar holidays and overnight report remain tenant-scoped',async()=>{
   assert.equal(report.body.days[1].worked,0);
   assert.equal((await api('/api/work-report?from=2026-10-20&to=2026-10-21',b)).body.totals.worked,0);
 });
+
+test('monthly archive is owner-only, immutable, tenant-scoped and blocked by pending requests',async()=>{
+  const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
+  const manager=(await api('/api/login',null,'POST',{company:'alpha',username:'middle',password:'strong-password-123'})).body.token;
+  assert.equal((await api('/api/work-months/finalize',staff,'POST',{month:'2026-10'})).status,403);
+  assert.equal((await api('/api/work-months/finalize',manager,'POST',{month:'2026-10'})).status,403);
+  assert.equal((await api('/api/work-months/finalize',a,'POST',{month:'2026-11'})).status,409);
+  const pending=await api('/api/requests',staff,'POST',{type:'annual_leave',work_date:'2026-10-20',minutes:60});
+  assert.equal(pending.status,201);
+  assert.equal((await api('/api/work-months/finalize',a,'POST',{month:'2026-10'})).status,409);
+  const url=`/api/requests/${pending.body.id}/decision`;
+  assert.equal((await api(url,manager,'POST',{status:'approved'})).status,200);
+  assert.equal((await api(url,a,'POST',{status:'approved'})).status,200);
+  // An attendance started in November must not block archiving October.
+  const boundaryDb=openDatabase(process.env.DB_PATH);
+  boundaryDb.prepare('INSERT INTO attendance(company_id,user_id,checked_in_at) VALUES(?,?,?)').run(1,3,'2026-11-02T06:00:00Z');
+  boundaryDb.close();
+  const archive=await api('/api/work-months/finalize',a,'POST',{month:'2026-10'});
+  assert.equal(archive.status,201);assert.equal(archive.body.authoritative,false);
+  assert.equal((await api('/api/work-months/finalize',a,'POST',{month:'2026-10'})).status,409);
+  assert.equal((await api('/api/work-months/2026-10',b)).status,404);
+  assert.equal((await api('/api/work-months',b)).body.items.length,0);
+  const snapshot=(await api('/api/work-months/2026-10',a)).body;
+  assert.equal(snapshot.status,'archived');assert.equal(snapshot.reports.length,3);
+  const original=snapshot.reports.find(x=>x.id===3).report.totals.worked;
+  assert.equal(original,480);
+  const write=openDatabase(process.env.DB_PATH);
+  write.prepare('INSERT INTO attendance(company_id,user_id,checked_in_at,checked_out_at) VALUES(?,?,?,?)').run(1,3,'2026-10-22T06:00:00Z','2026-10-22T07:00:00Z');
+  write.close();
+  assert.equal((await api('/api/work-months/2026-10',a)).body.reports.find(x=>x.id===3).report.totals.worked,original);
+  assert.equal((await api('/api/work-report?from=2026-10-20&to=2026-10-22',staff)).body.totals.worked,540);
+});

@@ -98,6 +98,16 @@ async function workReport(){const now=new Date(),today=now.toISOString().slice(0
     $('#export-csv').onclick=()=>{const keys=Object.keys(workFields),lines=[['تاریخ',...Object.values(workFields)].join(',')];for(const row of report.days)lines.push([row.day,...keys.map(key=>row[key])].join(','));
       const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`hozoryar-work-${report.from}-${report.to}.csv`;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);};
   });
+  if(isAdmin){
+    const archived=(await request('/api/work-months')).items;
+    const canArchive=state.user.role==='owner';
+    $('#content').insertAdjacentHTML('beforeend',`<section class="card stack" style="margin-top:20px"><h3>بایگانی ماهانه کارکرد</h3><div class="note">بایگانی فقط برای ماه‌های میلادی پایان‌یافته انجام می‌شود و پس از ثبت قابل جایگزینی نیست. این نسخه ثابت، تأیید حقوق و دستمزد نیست؛ تقویم رسمی هنوز اعتبارسنجی نشده است.</div>${canArchive?`<form id="archive-form" class="form-grid">${field('ماه میلادی','month','month')}<button class="primary" type="submit">ثبت بایگانی تغییرناپذیر</button></form>`:''}<label>ماه‌های بایگانی‌شده<select id="archive-select"><option value="">انتخاب ماه</option>${archived.map(x=>`<option value="${esc(x.month)}">${esc(x.month)} — ${esc(x.created_at)}</option>`).join('')}</select></label><div id="archive-result" aria-live="polite"></div></section>`);
+    if(canArchive){$('#archive-form [name=month]').value=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-1,1)).toISOString().slice(0,7);
+      $('#archive-form').onsubmit=guard(async e=>{const month=formData(e.target).month;if(!confirm(`بایگانی ماه ${month} پس از ثبت قابل بازنویسی نیست. ادامه می‌دهید؟`))return;await request('/api/work-months/finalize','POST',{month});toast('بایگانی ماهانه ثبت شد');await workReport();});}
+    $('#archive-select').onchange=guard(async e=>{const month=e.target.value;if(!month){$('#archive-result').innerHTML='';return;}const archived=await request('/api/work-months/'+month);
+      $('#archive-result').innerHTML=`<div class="note">بایگانی ثابت ${esc(archived.month)} — ${esc(archived.note)}</div><div class="table-wrap"><table class="table"><thead><tr><th>کارمند</th><th>حضور</th><th>موظفی</th><th>کسری</th><th>اضافه‌کاری</th><th>جمعه‌کاری</th></tr></thead><tbody>${archived.reports.map(x=>`<tr><td>${esc(x.name)}</td><td>${minutes(x.report.totals.worked)}</td><td>${minutes(x.report.totals.expected)}</td><td>${minutes(x.report.totals.shortage)}</td><td>${minutes(x.report.totals.overtime)}</td><td>${minutes(x.report.totals.friday_work)}</td></tr>`).join('')}</tbody></table></div>`;
+    });
+  }
 }
 
 function tileMap(el,items,provider){

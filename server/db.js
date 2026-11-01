@@ -95,6 +95,14 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       company_id INTEGER NOT NULL REFERENCES companies(id), work_date TEXT NOT NULL,
       title TEXT NOT NULL, PRIMARY KEY(company_id,work_date)
     );
+    CREATE TABLE IF NOT EXISTS work_month_archives (
+      company_id INTEGER NOT NULL REFERENCES companies(id), month TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL, created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(company_id,month),
+      FOREIGN KEY(company_id,created_by) REFERENCES users(company_id,id),
+      CHECK(length(month)=7)
+    );
   `);
   // Existing 0.1/0.2 databases are upgraded in place without touching tenant data.
   const settingColumns=db.prepare('PRAGMA table_info(company_settings)').all().map(x=>x.name);

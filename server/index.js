@@ -4,7 +4,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './db.js';
 import { issueSession, resolveSession, verifyPassword, revokeSession, passwordHash } from './auth.js';
-import { attendanceMetrics, dailyWork, dutyForDay, sessionsByEntryDate, sumWork } from './work.js';
+import { attendanceMetrics, dailyWork, dutyForDay, localInstant, sessionsByEntryDate, sumWork, tehranDate } from './work.js';
 import { calendarDays } from './calendar.js';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
@@ -38,6 +38,31 @@ async function body(req) {
 }
 const str = (v,max=120) => typeof v==='string' && v.trim().length>0 && v.trim().length<=max;
 const ownUser = (user,id) => db.prepare('SELECT id,name,role,active FROM users WHERE id=? AND company_id=?').get(id,user.company_id);
+const validDay = s => /^\d{4}-\d{2}-\d{2}$/.test(s||'') && !Number.isNaN(Date.parse(s)) && new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
+function buildWorkReport(companyId,targetId,from,to) {
+  const rows=db.prepare(`SELECT checked_in_at,checked_out_at FROM attendance WHERE company_id=? AND user_id=?
+    AND checked_in_at<=? AND (checked_out_at IS NULL OR checked_out_at>=?) ORDER BY checked_in_at`)
+    .all(companyId,targetId,new Date(Date.parse(to)+2*86400000).toISOString(),new Date(Date.parse(from)-2*86400000).toISOString());
+  const sessions=sessionsByEntryDate(rows,from,to);
+  const assignment=db.prepare(`SELECT s.duty_minutes,s.daily_ot_cap,s.start_time,s.end_time,s.schedule_kind,s.schedule_json FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
+    WHERE a.company_id=? AND a.user_id=?`).get(companyId,targetId);
+  const requests=db.prepare(`SELECT type,work_date,minutes FROM personnel_requests
+    WHERE company_id=? AND user_id=? AND status='approved' AND work_date BETWEEN ? AND ?`).all(companyId,targetId,from,to);
+  const holidays=new Set(db.prepare('SELECT work_date FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(companyId,from,to).map(x=>x.work_date));
+  const days=[],cursor=new Date(from+'T12:00:00Z'),limit=new Date(to+'T12:00:00Z');
+  while(cursor<=limit){const day=cursor.toISOString().slice(0,10),parts=sessions.get(day)||[];
+    const policy=assignment?JSON.parse(assignment.schedule_json||'{}'):{};
+    const metrics=attendanceMetrics(assignment,day,parts,policy);
+    days.push(dailyWork({day,...metrics,duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,hasShift:!!assignment,approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
+  return {user_id:targetId,from,to,days,totals:sumWork(days),authoritative:false,engine:'hozoryar-work-v3',reference:'khatyar/php/lib/ShiftCalc.php',note:'محاسبه شیفت و شب‌کاری بر مبنای تاریخ ورود و پنجره‌های شیفت انجام می‌شود. تقویم رسمی و سیاست‌های پیشرفته سازمانی هنوز تطبیق کامل نشده‌اند؛ برای حقوق قطعی استفاده نشود.'};
+}
+function monthBounds(month) {
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month||''))throw fail(400,'ماه میلادی نامعتبر است');
+  const [year,number]=month.split('-').map(Number);
+  const from=month+'-01',to=new Date(Date.UTC(year,number,0)).toISOString().slice(0,10);
+  if(to>=tehranDate(new Date()))throw fail(409,'بایگانی تنها برای ماه میلادی سپری‌شده مجاز است');
+  return {from,to};
+}
 
 async function api(req,res,url) {
   const method=req.method,path=url.pathname;
@@ -153,25 +178,43 @@ async function api(req,res,url) {
   }
   if(path==='/api/work-report' && method==='GET') {
     const from=url.searchParams.get('from'),to=url.searchParams.get('to');
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(from||'')||!/^\d{4}-\d{2}-\d{2}$/.test(to||'')||from>to||Date.parse(to)-Date.parse(from)>35*86400000) throw fail(400,'بازه گزارش باید حداکثر ۳۵ روز باشد');
+    if(!validDay(from)||!validDay(to)||from>to||Date.parse(to)-Date.parse(from)>35*86400000) throw fail(400,'بازه گزارش باید حداکثر ۳۵ روز باشد');
     const targetId=url.searchParams.has('user_id')?Number(url.searchParams.get('user_id')):user.id;
     if(targetId!==user.id)admin(user);
     if(!ownUser(user,targetId))throw fail(404,'کارمند یافت نشد');
-    const rows=db.prepare(`SELECT checked_in_at,checked_out_at FROM attendance WHERE company_id=? AND user_id=?
-      AND checked_in_at<=? AND (checked_out_at IS NULL OR checked_out_at>=?) ORDER BY checked_in_at`)
-      .all(user.company_id,targetId,new Date(Date.parse(to)+2*86400000).toISOString(),new Date(Date.parse(from)-2*86400000).toISOString());
-    const sessions=sessionsByEntryDate(rows,from,to);
-    const assignment=db.prepare(`SELECT s.duty_minutes,s.daily_ot_cap,s.start_time,s.end_time,s.schedule_kind,s.schedule_json FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
-       WHERE a.company_id=? AND a.user_id=?`).get(user.company_id,targetId);
-    const requests=db.prepare(`SELECT type,work_date,minutes FROM personnel_requests
-       WHERE company_id=? AND user_id=? AND status='approved' AND work_date BETWEEN ? AND ?`).all(user.company_id,targetId,from,to);
-    const holidays=new Set(db.prepare('SELECT work_date FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(user.company_id,from,to).map(x=>x.work_date));
-    const days=[],cursor=new Date(from+'T12:00:00Z'),limit=new Date(to+'T12:00:00Z');
-    while(cursor<=limit){const day=cursor.toISOString().slice(0,10),parts=sessions.get(day)||[];
-      const policy=assignment?JSON.parse(assignment.schedule_json||'{}'):{};
-      const metrics=attendanceMetrics(assignment,day,parts,policy);
-      days.push(dailyWork({day,...metrics,duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,hasShift:!!assignment,approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
-    return json(res,200,{user_id:targetId,from,to,days,totals:sumWork(days),authoritative:false,engine:'hozoryar-work-v3',reference:'khatyar/php/lib/ShiftCalc.php',note:'محاسبه شیفت و شب‌کاری بر مبنای تاریخ ورود و پنجره‌های شیفت انجام می‌شود. تقویم رسمی و سیاست‌های پیشرفته سازمانی هنوز تطبیق کامل نشده‌اند؛ برای حقوق قطعی استفاده نشود.'});
+    return json(res,200,buildWorkReport(user.company_id,targetId,from,to));
+  }
+  if(path==='/api/work-months' && method==='GET') {
+    admin(user);
+    const items=db.prepare('SELECT month,created_at,created_by FROM work_month_archives WHERE company_id=? ORDER BY month DESC LIMIT 36').all(user.company_id);
+    return json(res,200,{items});
+  }
+  const archiveMatch=/^\/api\/work-months\/(\d{4}-\d{2})$/.exec(path);
+  if(archiveMatch && method==='GET') {
+    admin(user);const month=archiveMatch[1];monthBounds(month);
+    const row=db.prepare('SELECT snapshot_json,created_at,created_by FROM work_month_archives WHERE company_id=? AND month=?').get(user.company_id,month);
+    if(!row)throw fail(404,'بایگانی این ماه وجود ندارد');
+    return json(res,200,{...JSON.parse(row.snapshot_json),created_at:row.created_at,created_by:row.created_by});
+  }
+  if(path==='/api/work-months/finalize' && method==='POST') {
+    owner(user);const {month}=await body(req),{from,to}=monthBounds(month);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if(db.prepare('SELECT 1 FROM work_month_archives WHERE company_id=? AND month=?').get(user.company_id,month))throw fail(409,'این ماه قبلاً بایگانی شده و قابل بازنویسی نیست');
+      const pending=db.prepare("SELECT COUNT(*) n FROM personnel_requests WHERE company_id=? AND work_date BETWEEN ? AND ? AND status='pending'").get(user.company_id,from,to).n;
+      if(pending)throw fail(409,`${pending} درخواست بررسی‌نشده در این ماه وجود دارد`);
+      const nextDay=new Date(Date.parse(to)+86400000).toISOString().slice(0,10);
+      const open=db.prepare('SELECT COUNT(*) n FROM attendance WHERE company_id=? AND checked_in_at<? AND checked_out_at IS NULL').get(user.company_id,new Date(localInstant(nextDay,0)).toISOString()).n;
+      if(open)throw fail(409,`${open} حضور بدون خروج وجود دارد؛ پیش از بایگانی بررسی کنید`);
+      const people=db.prepare('SELECT id,name,role FROM users WHERE company_id=? AND active=1 ORDER BY id').all(user.company_id);
+      const reports=people.map(person=>({...person,report:buildWorkReport(user.company_id,person.id,from,to)}));
+      const snapshot={month,from,to,status:'archived',authoritative:false,official_calendar_available:false,
+        note:'این سند یک نسخه ثابت از محاسبات غیرقطعی است؛ تأیید حقوق و دستمزد محسوب نمی‌شود.',reports};
+      db.prepare('INSERT INTO work_month_archives(company_id,month,snapshot_json,created_by) VALUES(?,?,?,?)')
+        .run(user.company_id,month,JSON.stringify(snapshot),user.id);
+      audit(user,'work_month.archive','work_month',null);
+      db.exec('COMMIT');return json(res,201,{ok:true,month,users:people.length,status:'archived',authoritative:false});
+    } catch(e){db.exec('ROLLBACK');throw e;}
   }
   if (path==='/api/settings' && method==='GET') {
     owner(user);const s=settings(user.company_id);
