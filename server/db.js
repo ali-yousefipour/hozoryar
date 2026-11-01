@@ -26,6 +26,8 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL REFERENCES companies(id),
       name TEXT NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL,
       duty_minutes INTEGER NOT NULL CHECK(duty_minutes BETWEEN 0 AND 1440),
+      schedule_kind TEXT NOT NULL DEFAULT 'fixed',
+      schedule_json TEXT NOT NULL DEFAULT '{}',
       UNIQUE(company_id,id)
     );
     CREATE TABLE IF NOT EXISTS assignments (
@@ -60,6 +62,7 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       geofence_lat REAL, geofence_lng REAL,
       geofence_radius_m INTEGER NOT NULL DEFAULT 300,
       require_location INTEGER NOT NULL DEFAULT 1,
+      approval_steps INTEGER NOT NULL DEFAULT 1 CHECK(approval_steps IN (1,2)),
       features_json TEXT NOT NULL DEFAULT '{"liveMap":true,"attendance":true,"monitoring":true,"shifts":true,"sms":false}'
     );
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -79,10 +82,24 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       FOREIGN KEY(company_id,decided_by) REFERENCES users(company_id,id)
     );
     CREATE INDEX IF NOT EXISTS personnel_requests_company_date ON personnel_requests(company_id,work_date,status);
+    CREATE TABLE IF NOT EXISTS request_decisions (
+      id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, request_id INTEGER NOT NULL,
+      stage INTEGER NOT NULL, actor_user_id INTEGER NOT NULL,
+      outcome TEXT NOT NULL CHECK(outcome IN ('approved','rejected')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(company_id,actor_user_id) REFERENCES users(company_id,id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS request_one_decision_per_stage ON request_decisions(company_id,request_id,stage);
     CREATE TABLE IF NOT EXISTS company_holidays (
       company_id INTEGER NOT NULL REFERENCES companies(id), work_date TEXT NOT NULL,
       title TEXT NOT NULL, PRIMARY KEY(company_id,work_date)
     );
   `);
+  // Existing 0.1/0.2 databases are upgraded in place without touching tenant data.
+  const settingColumns=db.prepare('PRAGMA table_info(company_settings)').all().map(x=>x.name);
+  if(!settingColumns.includes('approval_steps'))db.exec('ALTER TABLE company_settings ADD COLUMN approval_steps INTEGER NOT NULL DEFAULT 1 CHECK(approval_steps IN (1,2))');
+  const shiftColumns=db.prepare('PRAGMA table_info(shifts)').all().map(x=>x.name);
+  if(!shiftColumns.includes('schedule_kind'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_kind TEXT NOT NULL DEFAULT 'fixed'");
+  if(!shiftColumns.includes('schedule_json'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_json TEXT NOT NULL DEFAULT '{}'");
   return db;
 }

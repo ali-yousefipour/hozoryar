@@ -87,3 +87,21 @@ test('personnel request decisions stay inside their company and affect reports',
   assert.equal(report.body.days[0].shortage,360);
   assert.equal((await api('/api/work-report?from=2026-11-02&to=2026-11-02&user_id=3',b)).status,404);
 });
+
+test('two-step approvals require manager then company owner',async()=>{
+  const m=await api('/api/users',a,'POST',{name:'مدیر میانی',username:'middle',password:'strong-password-123',role:'manager'});
+  assert.equal(m.status,201);
+  const manager=(await api('/api/login',null,'POST',{company:'alpha',username:'middle',password:'strong-password-123'})).body.token;
+  assert.equal((await api('/api/settings',a,'PATCH',{approval_steps:2})).status,200);
+  const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
+  const created=await api('/api/requests',staff,'POST',{type:'mission',work_date:'2026-11-03',minutes:120});
+  assert.equal(created.status,201);
+  const url=`/api/requests/${created.body.id}/decision`;
+  assert.equal((await api(url,a,'POST',{status:'approved'})).status,403);
+  const first=await api(url,manager,'POST',{status:'approved'});
+  assert.equal(first.status,200);assert.equal(first.body.status,'pending');
+  assert.equal((await api(url,manager,'POST',{status:'approved'})).status,403);
+  const second=await api(url,a,'POST',{status:'approved'});
+  assert.equal(second.status,200);assert.equal(second.body.status,'approved');
+  assert.equal((await api('/api/work-report?from=2026-11-03&to=2026-11-03',staff)).body.days[0].mission,120);
+});

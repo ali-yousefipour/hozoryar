@@ -8,6 +8,19 @@ export const tehranDate = date => {
   return `${fields.year}-${fields.month}-${fields.day}`;
 };
 export const isFriday = date => weekdayFormatter.format(new Date(date+'T12:00:00+03:30'))==='Fri';
+export function dutyForDay(shift,day) {
+  if(!shift)return 0;
+  const kind=shift.schedule_kind||'fixed',config=JSON.parse(shift.schedule_json||'{}');
+  const weekday=new Date(day+'T12:00:00Z').getUTCDay();
+  if(kind==='weekly')return config.days.includes(weekday)?shift.duty_minutes:0;
+  if(kind==='rotating'){
+    const elapsed=Math.floor((Date.parse(day+'T00:00:00Z')-Date.parse(config.anchor+'T00:00:00Z'))/86400000);
+    const index=((elapsed%(config.work+config.rest))+(config.work+config.rest))%(config.work+config.rest);
+    return index<config.work?shift.duty_minutes:0;
+  }
+  if(kind==='floating')return shift.duty_minutes;
+  return shift.duty_minutes;
+}
 const nextDateBoundary = ms => {
   const day=tehranDate(new Date(ms));let low=ms+1,high=ms+48*3600000;
   while(low<high){const mid=Math.floor((low+high)/2);if(tehranDate(new Date(mid))===day)low=mid+1;else high=mid;}

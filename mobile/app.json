@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "حضوریار",
+    "slug": "hozoryar",
+    "scheme": "hozoryar",
+    "version": "0.3.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/logo.png",
+    "splash": { "image": "./assets/logo.png", "resizeMode": "contain", "backgroundColor": "#4C1D95" },
+    "android": {
+      "package": "ir.hozoryar.app",
+      "versionCode": 300,
+      "adaptiveIcon": { "foregroundImage": "./assets/logo.png", "backgroundColor": "#4C1D95" },
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION", "ACCESS_BACKGROUND_LOCATION", "FOREGROUND_SERVICE_LOCATION"]
+    },
+    "plugins": [["expo-location",{"locationWhenInUsePermission":"برای ثبت ورود و ارسال موقعیت هنگام حضور، اجازه دسترسی به موقعیت لازم است.","isAndroidBackgroundLocationEnabled":true,"isAndroidForegroundServiceEnabled":true}]],
+    "extra": { "apiBaseUrl": "https://your-hozoryar-domain.example" }
+  }
+}

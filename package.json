@@ -1,11 +1,12 @@
 {
   "name": "hozoryar",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server/index.js",
     "bootstrap": "node server/bootstrap.js",
+    "backup": "node server/backup.js",
     "test": "node --test tests/*.test.js"
   },
   "engines": { "node": ">=22.13.0" }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dailyWork, splitSessions, sumWork } from '../server/work.js';
+import { dailyWork, dutyForDay, splitSessions, sumWork } from '../server/work.js';
 
 test('Friday is exclusive of a manually declared holiday',()=>{
   const friday=dailyWork({day:'2026-10-30',worked:600,duty:480,holiday:true});
@@ -32,4 +32,15 @@ test('monthly summary is a simple non-duplicating sum',()=>{
   const days=[dailyWork({day:'2026-10-30',worked:240,holiday:true}),dailyWork({day:'2026-10-31',worked:450,duty:480})];
   const sum=sumWork(days);assert.equal(sum.worked,690);assert.equal(sum.friday_work,240);
   assert.equal(sum.holiday_work,0);assert.equal(sum.shortage,30);
+});
+
+test('weekly, rotating and floating shifts use independent duty rules',()=>{
+  const weekly={duty_minutes:480,schedule_kind:'weekly',schedule_json:JSON.stringify({days:[1,2,3,4]})};
+  assert.equal(dutyForDay(weekly,'2026-11-02'),480);
+  assert.equal(dutyForDay(weekly,'2026-11-06'),0);
+  const rotating={duty_minutes:600,schedule_kind:'rotating',schedule_json:JSON.stringify({anchor:'2026-11-01',work:2,rest:2})};
+  assert.equal(dutyForDay(rotating,'2026-11-02'),600);
+  assert.equal(dutyForDay(rotating,'2026-11-03'),0);
+  assert.equal(dutyForDay(rotating,'2026-10-31'),0);
+  assert.equal(dutyForDay({duty_minutes:360,schedule_kind:'floating',schedule_json:'{}'},'2026-11-02'),360);
 });

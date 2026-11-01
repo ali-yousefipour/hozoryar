@@ -4,11 +4,21 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './db.js';
 import { issueSession, resolveSession, verifyPassword, revokeSession, passwordHash } from './auth.js';
-import { dailyWork, splitSessions, sumWork, tehranDate } from './work.js';
+import { dailyWork, dutyForDay, splitSessions, sumWork } from './work.js';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
 const logo = resolve(fileURLToPath(new URL('../branding/hozoryar-logo.png', import.meta.url)));
 const db = openDatabase();
+const loginAttempts=new Map();
+const LOGIN_WINDOW=15*60*1000,LOGIN_LIMIT=12;
+function checkLoginRate(req){
+  const key=req.socket.remoteAddress||'unknown',now=Date.now();
+  if(loginAttempts.size>5000)for(const [ip,entry] of loginAttempts)if(now-entry.started>LOGIN_WINDOW)loginAttempts.delete(ip);
+  const entry=loginAttempts.get(key);
+  if(!entry||now-entry.started>LOGIN_WINDOW){loginAttempts.set(key,{started:now,count:1});return key;}
+  if(entry.count>=LOGIN_LIMIT)throw fail(429,'تلاش ورود بیش از حد؛ بعداً دوباره تلاش کنید');
+  entry.count++;return key;
+}
 const json = (res,code,body) => { res.writeHead(code,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(JSON.stringify(body)); };
 const fail = (code,message) => Object.assign(new Error(message),{status:code});
 const admin = user => { if (!['owner','manager'].includes(user.role)) throw fail(403,'دسترسی مدیریتی لازم است'); };
@@ -32,11 +42,13 @@ async function api(req,res,url) {
   const method=req.method,path=url.pathname;
   if (path==='/api/health' && method==='GET') return json(res,200,{ok:true,service:'hozoryar'});
   if (path==='/api/login' && method==='POST') {
+    const loginIp=checkLoginRate(req);
     const b=await body(req);
     if (![b.company,b.username,b.password].every(x=>str(x,200))) throw fail(400,'اطلاعات ورود کامل نیست');
     const user=db.prepare(`SELECT u.*,c.name company_name FROM users u JOIN companies c ON c.id=u.company_id
       WHERE c.slug=? AND c.active=1 AND u.username=? AND u.active=1`).get(b.company,b.username);
     if (!user || !verifyPassword(b.password,user.password_hash)) throw fail(401,'اطلاعات ورود صحیح نیست');
+    loginAttempts.delete(loginIp);
     const session=issueSession(db,user);
     return json(res,200,{...session,user:{id:user.id,name:user.name,role:user.role,company_id:user.company_id,company_name:user.company_name}});
   }
@@ -62,11 +74,15 @@ async function api(req,res,url) {
     const result=db.prepare('INSERT INTO users(company_id,name,username,password_hash,role) VALUES(?,?,?,?,?)').run(user.company_id,b.name,b.username,passwordHash(b.password),b.role);
     audit(user,'user.create','user',Number(result.lastInsertRowid));return json(res,201,{id:Number(result.lastInsertRowid)});
   }
-  if (path==='/api/shifts' && method==='GET') {feature(user,'shifts');return json(res,200,{items:db.prepare('SELECT id,name,start_time,end_time,duty_minutes FROM shifts WHERE company_id=?').all(user.company_id)});}
+  if (path==='/api/shifts' && method==='GET') {feature(user,'shifts');return json(res,200,{items:db.prepare('SELECT id,name,start_time,end_time,duty_minutes,schedule_kind,schedule_json FROM shifts WHERE company_id=?').all(user.company_id)});}
   if (path==='/api/shifts' && method==='POST') {
     admin(user);feature(user,'shifts');const b=await body(req);
     if(!str(b.name)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.start_time)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.end_time)||!Number.isInteger(b.duty_minutes)||b.duty_minutes<0||b.duty_minutes>1440) throw fail(400,'اطلاعات شیفت نامعتبر است');
-    const result=db.prepare('INSERT INTO shifts(company_id,name,start_time,end_time,duty_minutes) VALUES(?,?,?,?,?)').run(user.company_id,b.name,b.start_time,b.end_time,b.duty_minutes);
+    const kind=b.schedule_kind||'fixed',config=b.schedule||{};
+    if(!['fixed','weekly','rotating','floating'].includes(kind))throw fail(400,'نوع شیفت نامعتبر است');
+    if(kind==='weekly'&&(!Array.isArray(config.days)||config.days.some(x=>!Number.isInteger(x)||x<0||x>6)||new Set(config.days).size!==config.days.length))throw fail(400,'روزهای شیفت هفتگی نامعتبر است');
+    if(kind==='rotating'&&(!Number.isInteger(config.work)||config.work<1||config.work>30||!Number.isInteger(config.rest)||config.rest<1||config.rest>30||!/^\d{4}-\d{2}-\d{2}$/.test(config.anchor||'')||Number.isNaN(Date.parse(config.anchor))))throw fail(400,'چرخه شیفت نامعتبر است');
+    const result=db.prepare('INSERT INTO shifts(company_id,name,start_time,end_time,duty_minutes,schedule_kind,schedule_json) VALUES(?,?,?,?,?,?,?)').run(user.company_id,b.name,b.start_time,b.end_time,b.duty_minutes,kind,JSON.stringify(config));
     audit(user,'shift.create','shift',Number(result.lastInsertRowid));return json(res,201,{id:Number(result.lastInsertRowid)});
   }
   if (path==='/api/assignments' && method==='POST') {
@@ -83,6 +99,7 @@ async function api(req,res,url) {
     :db.prepare(`SELECT r.id,r.user_id,u.name,r.type,r.work_date,r.minutes,r.description,r.status,r.created_at
       FROM personnel_requests r JOIN users u ON u.id=r.user_id AND u.company_id=r.company_id
       WHERE r.company_id=? ORDER BY r.id DESC LIMIT 200`).all(user.company_id);
+    for(const item of items){item.next_stage=db.prepare('SELECT COUNT(*) n FROM request_decisions WHERE company_id=? AND request_id=?').get(user.company_id,item.id).n+1;item.total_steps=settings(user.company_id).approval_steps;}
     return json(res,200,{items});
   }
   if(path==='/api/requests' && method==='POST') {
@@ -96,13 +113,25 @@ async function api(req,res,url) {
   if(decision && method==='POST') {
     admin(user);const id=Number(decision[1]),b=await body(req);
     if(!['approved','rejected'].includes(b.status)) throw fail(400,'وضعیت نامعتبر است');
-    const target=db.prepare('SELECT id,user_id,status FROM personnel_requests WHERE id=? AND company_id=?').get(id,user.company_id);
-    if(!target)throw fail(404,'درخواست شرکت یافت نشد');
-    if(target.user_id===user.id)throw fail(403,'تأیید درخواست خود مجاز نیست');
-    if(target.status!=='pending')throw fail(409,'این درخواست قبلاً بررسی شده است');
-    db.prepare(`UPDATE personnel_requests SET status=?,decided_by=?,decided_at=? WHERE id=? AND company_id=? AND status='pending'`)
-      .run(b.status,user.id,new Date().toISOString(),id,user.company_id);
-    audit(user,'request.'+b.status,'personnel_request',id);return json(res,200,{ok:true});
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const target=db.prepare('SELECT id,user_id,status FROM personnel_requests WHERE id=? AND company_id=?').get(id,user.company_id);
+      if(!target)throw fail(404,'درخواست شرکت یافت نشد');
+      if(target.user_id===user.id)throw fail(403,'تأیید درخواست خود مجاز نیست');
+      if(target.status!=='pending')throw fail(409,'این درخواست قبلاً بررسی شده است');
+      const previous=db.prepare('SELECT COUNT(*) n FROM request_decisions WHERE company_id=? AND request_id=?').get(user.company_id,id).n;
+      const step=previous+1,totalSteps=settings(user.company_id).approval_steps;
+      if(step>totalSteps)throw fail(409,'مراحل تأیید تکمیل شده‌اند');
+      if(totalSteps===2) {
+        const managers=db.prepare(`SELECT COUNT(*) n FROM users WHERE company_id=? AND role='manager' AND active=1`).get(user.company_id).n;
+        if(step===1 && user.role!=='manager' && !(user.role==='owner'&&managers===0))throw fail(403,'مرحله اول تأیید با مدیر میانی است');
+        if(step===2 && user.role!=='owner')throw fail(403,'مرحله نهایی تأیید با مدیر شرکت است');
+      }
+      db.prepare('INSERT INTO request_decisions(company_id,request_id,stage,actor_user_id,outcome) VALUES(?,?,?,?,?)').run(user.company_id,id,step,user.id,b.status);
+      const finalStatus=b.status==='rejected'?'rejected':step===totalSteps?'approved':'pending';
+      if(finalStatus!=='pending')db.prepare(`UPDATE personnel_requests SET status=?,decided_by=?,decided_at=? WHERE id=? AND company_id=?`).run(finalStatus,user.id,new Date().toISOString(),id,user.company_id);
+      audit(user,'request.'+b.status,'personnel_request',id);db.exec('COMMIT');return json(res,200,{ok:true,status:finalStatus,stage:step,total_steps:totalSteps});
+    } catch(e){db.exec('ROLLBACK');throw e;}
   }
   if(path==='/api/holidays' && method==='GET') {
     return json(res,200,{items:db.prepare('SELECT work_date,title FROM company_holidays WHERE company_id=? ORDER BY work_date').all(user.company_id)});
@@ -123,18 +152,18 @@ async function api(req,res,url) {
       AND checked_in_at<=? AND (checked_out_at IS NULL OR checked_out_at>=?) ORDER BY checked_in_at`)
       .all(user.company_id,targetId,new Date(Date.parse(to)+2*86400000).toISOString(),new Date(Date.parse(from)-2*86400000).toISOString());
     const sessions=splitSessions(rows,from,to);
-    const assignment=db.prepare(`SELECT s.duty_minutes FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
+    const assignment=db.prepare(`SELECT s.duty_minutes,s.schedule_kind,s.schedule_json FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
        WHERE a.company_id=? AND a.user_id=?`).get(user.company_id,targetId);
     const requests=db.prepare(`SELECT type,work_date,minutes FROM personnel_requests
        WHERE company_id=? AND user_id=? AND status='approved' AND work_date BETWEEN ? AND ?`).all(user.company_id,targetId,from,to);
     const holidays=new Set(db.prepare('SELECT work_date FROM company_holidays WHERE company_id=? AND work_date BETWEEN ? AND ?').all(user.company_id,from,to).map(x=>x.work_date));
     const days=[],cursor=new Date(from+'T12:00:00Z'),limit=new Date(to+'T12:00:00Z');
-    while(cursor<=limit){const day=cursor.toISOString().slice(0,10);days.push(dailyWork({day,worked:sessions.get(day)||0,duty:assignment?.duty_minutes||0,approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
+    while(cursor<=limit){const day=cursor.toISOString().slice(0,10);days.push(dailyWork({day,worked:sessions.get(day)||0,duty:dutyForDay(assignment,day),approved:requests.filter(r=>r.work_date===day),holiday:holidays.has(day)}));cursor.setUTCDate(cursor.getUTCDate()+1);}
     return json(res,200,{user_id:targetId,from,to,days,totals:sumWork(days),note:'محاسبات نسخه پایه: موظفی شیفت روزانه، تعطیلات دستی و جمعه؛ بدون تقویم رسمی، سقف اضافه‌کاری و قواعد پیشرفته خطیار.'});
   }
   if (path==='/api/settings' && method==='GET') {
     owner(user);const s=settings(user.company_id);
-    return json(res,200,{map_provider:s.map_provider,sms_provider:s.sms_provider,require_location:!!s.require_location,geofence_lat:s.geofence_lat,geofence_lng:s.geofence_lng,geofence_radius_m:s.geofence_radius_m,features:JSON.parse(s.features_json),neshan_key_configured:!!s.neshan_api_key,sms_key_configured:!!s.sms_api_key});
+    return json(res,200,{map_provider:s.map_provider,sms_provider:s.sms_provider,require_location:!!s.require_location,geofence_lat:s.geofence_lat,geofence_lng:s.geofence_lng,geofence_radius_m:s.geofence_radius_m,approval_steps:s.approval_steps,features:JSON.parse(s.features_json),neshan_key_configured:!!s.neshan_api_key,sms_key_configured:!!s.sms_api_key});
   }
   if (path==='/api/settings' && method==='PATCH') {
     owner(user);const b=await body(req);const s=settings(user.company_id);
@@ -145,10 +174,11 @@ async function api(req,res,url) {
     if(b.geofence_lat!==undefined && b.geofence_lat!==null && (!Number.isFinite(b.geofence_lat)||Math.abs(b.geofence_lat)>90)) throw fail(400,'عرض جغرافیایی نامعتبر است');
     if(b.geofence_lng!==undefined && b.geofence_lng!==null && (!Number.isFinite(b.geofence_lng)||Math.abs(b.geofence_lng)>180)) throw fail(400,'طول جغرافیایی نامعتبر است');
     if(b.geofence_radius_m!==undefined && (!Number.isInteger(b.geofence_radius_m)||b.geofence_radius_m<50||b.geofence_radius_m>50000)) throw fail(400,'شعاع نامعتبر است');
+    if(b.approval_steps!==undefined && ![1,2].includes(b.approval_steps))throw fail(400,'تعداد مراحل تأیید نامعتبر است');
     const f=b.features===undefined?JSON.parse(s.features_json):b.features;
     if(!f||typeof f!=='object'||Array.isArray(f)||Object.keys(f).some(k=>!['liveMap','attendance','monitoring','shifts','sms'].includes(k))||Object.values(f).some(v=>typeof v!=='boolean')) throw fail(400,'تنظیمات قابلیت‌ها نامعتبر است');
-    db.prepare(`UPDATE company_settings SET map_provider=?,neshan_api_key=?,sms_provider=?,sms_api_key=?,require_location=?,geofence_lat=?,geofence_lng=?,geofence_radius_m=?,features_json=? WHERE company_id=?`)
-      .run(b.map_provider??s.map_provider,b.neshan_api_key===undefined?s.neshan_api_key:b.neshan_api_key,b.sms_provider??s.sms_provider,b.sms_api_key===undefined?s.sms_api_key:b.sms_api_key,b.require_location===undefined?s.require_location:Number(!!b.require_location),b.geofence_lat===undefined?s.geofence_lat:b.geofence_lat,b.geofence_lng===undefined?s.geofence_lng:b.geofence_lng,b.geofence_radius_m??s.geofence_radius_m,JSON.stringify(f),user.company_id);
+    db.prepare(`UPDATE company_settings SET map_provider=?,neshan_api_key=?,sms_provider=?,sms_api_key=?,require_location=?,geofence_lat=?,geofence_lng=?,geofence_radius_m=?,approval_steps=?,features_json=? WHERE company_id=?`)
+      .run(b.map_provider??s.map_provider,b.neshan_api_key===undefined?s.neshan_api_key:b.neshan_api_key,b.sms_provider??s.sms_provider,b.sms_api_key===undefined?s.sms_api_key:b.sms_api_key,b.require_location===undefined?s.require_location:Number(!!b.require_location),b.geofence_lat===undefined?s.geofence_lat:b.geofence_lat,b.geofence_lng===undefined?s.geofence_lng:b.geofence_lng,b.geofence_radius_m??s.geofence_radius_m,b.approval_steps??s.approval_steps,JSON.stringify(f),user.company_id);
     audit(user,'settings.update','company',user.company_id);return json(res,200,{ok:true});
   }
   if (path==='/api/attendance' && method==='POST') {
