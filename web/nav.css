@@ -1,0 +1,2 @@
+nav svg { width: 19px; height: 19px; flex-shrink: 0; }
+nav button[aria-current="page"] { font-weight: 800; }

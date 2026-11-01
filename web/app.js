@@ -1,4 +1,21 @@
 const $=s=>document.querySelector(s), state={token:sessionStorage.getItem('hz_token'),user:null,features:{},view:'dashboard'};
+const navPaths={
+  dashboard:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+  attendance:'M12 6v6l4 2 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
+  requests:'M8 4h12v17H4V4h4 M8 2v4 M12 11h5 M12 15h5 M8 11h.01 M8 15h.01',
+  report:'M3 3v18h18 M8 16v-4 M13 16V8 M18 16V5',
+  people:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75',
+  shifts:'M8 2v4 M16 2v4 M3 10h18 M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2 M8 14h3 M8 18h3',
+  map:'M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z M9 3v15 M15 6v15',
+  monitor:'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7 M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6',
+  settings:'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.86 1.86-.06-.06A1.7 1.7 0 0 0 16 18.4a1.7 1.7 0 0 0-1 .6V22h-6v-3a1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.88.34l-.06.06L4.2 16.94l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1H1v-4h3a1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.88L4.2 7.06 6.06 5.2l.06.06A1.7 1.7 0 0 0 8 5.6a1.7 1.7 0 0 0 1-.6V2h6v3a1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.86 1.86-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 .6 1h3v4h-3a1.7 1.7 0 0 0-.6 1'
+};
+document.querySelectorAll('#nav button[data-view]').forEach(button=>{
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.8');svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');svg.setAttribute('aria-hidden','true');
+  const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',navPaths[button.dataset.view]);svg.append(path);
+  button.firstChild.textContent='';button.prepend(svg);
+});
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fa=n=>new Intl.NumberFormat('fa-IR').format(n||0);
 const date=s=>s?new Intl.DateTimeFormat('fa-IR',{dateStyle:'medium',timeStyle:'short',calendar:'persian'}).format(new Date(s)):'—';
@@ -25,7 +42,8 @@ async function authenticate(){const response=await request('/api/me');state.user
 }
 
 async function navigate(view){
-  state.view=view;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
+  state.view=view;if(location.hash!=='#'+view)history.replaceState(null,'','#'+view);
+  document.querySelectorAll('#nav button').forEach(b=>{const active=b.dataset.view===view;b.classList.toggle('active',active);if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
   const titles={dashboard:'داشبورد مدیریتی',attendance:'ثبت حضور من',requests:'مرخصی و مأموریت',report:'گزارش کارکرد',people:'مدیریت پرسنل',shifts:'شیفت‌های کاری',map:'نقشه زنده نیروها',monitor:'نظارت بر پرسنل',settings:'تنظیمات شرکت'};
   $('#page-title').textContent=titles[view]||view;setContent('<div class="card">در حال بارگذاری...</div>');
   try{if(view==='dashboard')await dashboard();if(view==='attendance')await attendance();if(view==='requests')await requests();if(view==='report')await workReport();if(view==='people')await people();if(view==='shifts')await shifts();if(view==='map')await liveMap();if(view==='monitor')await monitor();if(view==='settings')await settings();}
@@ -110,4 +128,5 @@ async function settings(){const s=await request('/api/settings');setContent(`<di
 $('#login-form').onsubmit=guard(async e=>{const b=formData(e.target),res=await request('/api/login','POST',b);state.token=res.token;sessionStorage.setItem('hz_token',state.token);$('#login-error').textContent='';await authenticate();});
 $('#nav').onclick=e=>{const b=e.target.closest('button[data-view]');if(b && !b.classList.contains('hidden'))navigate(b.dataset.view);};
 $('#logout').onclick=guard(async()=>{await request('/api/logout','POST');loginScreen();});
+window.addEventListener('hashchange',()=>{const view=location.hash.slice(1);const button=document.querySelector(`#nav button[data-view="${CSS.escape(view)}"]`);if(state.user&&button&&!button.classList.contains('hidden'))navigate(view);});
 if(state.token)authenticate().catch(()=>loginScreen());
