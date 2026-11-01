@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { attendanceMetrics, dailyWork, dutyForDay, localInstant, nightMinutes, sessionsByEntryDate, splitSessionDetails, splitSessions, sumWork } from '../server/work.js';
+import { allowedShiftTraffic, attendanceMetrics, dailyWork, dutyForDay, localInstant, nightMinutes, sessionsByEntryDate, splitSessionDetails, splitSessions, sumWork } from '../server/work.js';
 
 test('Friday is exclusive of a manually declared holiday',()=>{
   const friday=dailyWork({day:'2026-10-30',worked:600,duty:480,holiday:true});
@@ -143,4 +143,19 @@ test('Khatyar automatic shift uses independent daily duty and no fixed-clock tar
   const report=dailyWork({day,...metrics,duty:dutyForDay(shift,day),overtimeCap:27});
   assert.equal(report.overtime,27);assert.equal(report.shortage,0);
   assert.equal(report.surplus,0);
+});
+
+test('shift traffic gates use start/end windows and recognize previous-day night checkout',()=>{
+  const day='2026-11-02';
+  const fixed={schedule_kind:'fixed',start_time:'08:00',end_time:'16:00',duty_minutes:480,schedule_json:'{}'};
+  assert.equal(allowedShiftTraffic(fixed,localInstant(day,7*60+30),'in'),true);
+  assert.equal(allowedShiftTraffic(fixed,localInstant(day,11*60),'in'),false);
+  assert.equal(allowedShiftTraffic(fixed,localInstant(day,16*60+40),'out'),true);
+  assert.equal(allowedShiftTraffic(fixed,localInstant(day,11*60),'out'),false);
+  const night={...fixed,start_time:'23:00',end_time:'07:00'};
+  const tomorrow='2026-11-03';
+  assert.equal(allowedShiftTraffic(night,localInstant(tomorrow,6*60+30),'out'),true);
+  assert.equal(allowedShiftTraffic(night,localInstant(tomorrow,12*60),'out'),false);
+  const floating={schedule_kind:'auto',schedule_json:'{}'};
+  assert.equal(allowedShiftTraffic(floating,localInstant(day,11*60),'in'),true);
 });

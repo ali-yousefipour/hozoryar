@@ -1,4 +1,4 @@
-import React,{useEffect,useState} from 'react';
+import React,{useEffect,useRef,useState} from 'react';
 import {SafeAreaView,ScrollView,View,Text,TextInput,TouchableOpacity,Image,ActivityIndicator,Alert,StatusBar,StyleSheet} from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as Location from 'expo-location';
@@ -14,6 +14,7 @@ async function req(path,token,method='GET',body){
 }
 function Button({children,onPress,secondary=false,disabled=false}){return <TouchableOpacity accessible accessibilityRole="button" disabled={disabled} style={[styles.button,secondary&&styles.secondary,disabled&&{opacity:.45}]} onPress={onPress}><Text style={[styles.buttonText,secondary&&{color:purple}]}>{children}</Text></TouchableOpacity>}
 export default function App(){
+  const pendingPunch=useRef(null);
   const [token,setToken]=useState(null),[ready,setReady]=useState(false),[company,setCompany]=useState(''),[username,setUsername]=useState(''),[password,setPassword]=useState('');
   const [me,setMe]=useState(null),[records,setRecords]=useState([]),[requests,setRequests]=useState([]),[busy,setBusy]=useState(false),[tab,setTab]=useState('attendance'),[tracking,setTracking]=useState(false);
   const call=(path,method,body)=>req(path,token,method,body);
@@ -21,10 +22,16 @@ export default function App(){
   async function reload(authToken=token){const [m,r,q]=await Promise.all([req('/api/me',authToken),req('/api/attendance',authToken),req('/api/requests?scope=mine',authToken)]);setMe(m.user);setRecords(r.items);setRequests(q.items);setTracking(await isTracking());}
   useEffect(()=>{(async()=>{try{const saved=await SecureStore.getItemAsync('hozoryar_token');if(saved){setToken(saved);await reload(saved)}}catch{await SecureStore.deleteItemAsync('hozoryar_token');setToken(null)}finally{setReady(true)}})()},[]);
   async function login(){const result=await req('/api/login',null,'POST',{company,username,password});await SecureStore.setItemAsync('hozoryar_token',result.token);setToken(result.token);setPassword('');await reload(result.token);}
-  async function logout(){try{await call('/api/logout','POST')}finally{await stopTracking();await SecureStore.deleteItemAsync('hozoryar_token');setToken(null);setMe(null);setRecords([]);setTracking(false)}}
+  async function logout(){try{await call('/api/logout','POST')}finally{pendingPunch.current=null;await stopTracking();await SecureStore.deleteItemAsync('hozoryar_token');setToken(null);setMe(null);setRecords([]);setTracking(false)}}
   async function getPosition(){const result=await Location.requestForegroundPermissionsAsync();if(result.status!=='granted')throw Error('دسترسی موقعیت داده نشده است');const p=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.High});return {lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy}}
   const active=records.find(r=>!r.checked_out_at);
-  async function punch(){const body=active?{action:'out'}:{action:'in',...await getPosition()};await call('/api/attendance','POST',body);if(active){await stopTracking();setTracking(false)}await reload();Alert.alert('ثبت شد',active?'خروج شما ثبت شد':'ورود شما ثبت شد')}
+  async function punch(){const action=active?'out':'in';
+    // Reuse the same id after a timeout: the server can safely replay a committed punch.
+    if(!pendingPunch.current||pendingPunch.current.action!==action){const event_id=`punch_${Date.now()}_${Math.random().toString(36).slice(2,14)}`;
+      pendingPunch.current={action,event_id,...(action==='in'?await getPosition():{})};}
+    await call('/api/attendance','POST',pendingPunch.current);
+    pendingPunch.current=null;
+    if(active){await stopTracking();setTracking(false)}await reload();Alert.alert('ثبت شد',active?'خروج شما ثبت شد':'ورود شما ثبت شد')}
   async function sendLocation(){await call('/api/location','POST',await getPosition());Alert.alert('حضوریار','موقعیت شما در نقشه زنده ثبت شد')}
   async function toggleTracking(){if(tracking){await stopTracking();setTracking(false)}else{await startTracking();setTracking(true)}}
   if(!ready)return <View style={styles.center}><ActivityIndicator color={purple} size="large"/></View>;

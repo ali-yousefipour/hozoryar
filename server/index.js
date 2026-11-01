@@ -4,12 +4,13 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './db.js';
 import { issueSession, resolveSession, verifyPassword, revokeSession, passwordHash, issuePlatformSession, resolvePlatformSession, revokePlatformSession } from './auth.js';
-import { attendanceMetrics, dailyWork, dutyForDay, localInstant, sessionsByEntryDate, sumWork, tehranDate } from './work.js';
+import { attendanceMetrics, dailyWork, dutyForDay, localInstant, sessionsByEntryDate, sumWork, tehranDate, allowedShiftTraffic } from './work.js';
 import { calendarDays, jalaliMonthBounds } from './calendar.js';
 import { loadOfficialCalendar } from './official-calendar.js';
 import { archivedWorkXlsx } from './xlsx.js';
 import { annualLeaveByYear } from './leave-balance.js';
 import { payrollPreview, snapshotDigest } from './payroll.js';
+import { reportedOfflineMinutes } from './monitoring.js';
 
 const root = resolve(fileURLToPath(new URL('../web/', import.meta.url)));
 const logo = resolve(fileURLToPath(new URL('../branding/hozoryar-logo.png', import.meta.url)));
@@ -50,10 +51,19 @@ function annualLeaveBalance(companyId,userId,year,excludingId=0){
   return {year,quota_minutes:quota,used_minutes:used,remaining_minutes:quota-used};
 }
 function buildWorkReport(companyId,targetId,from,to,official) {
-  const rows=db.prepare(`SELECT checked_in_at,checked_out_at FROM attendance WHERE company_id=? AND user_id=?
+  const rows=db.prepare(`SELECT id,checked_in_at,checked_out_at FROM attendance WHERE company_id=? AND user_id=?
     AND checked_in_at<=? AND (checked_out_at IS NULL OR checked_out_at>=?) ORDER BY checked_in_at`)
     .all(companyId,targetId,new Date(Date.parse(to)+2*86400000).toISOString(),new Date(Date.parse(from)-2*86400000).toISOString());
   const sessions=sessionsByEntryDate(rows,from,to);
+  const deviceEvents=db.prepare(`SELECT e.attendance_id,e.kind,e.recorded_at FROM monitoring_events e
+    JOIN attendance a ON a.id=e.attendance_id AND a.company_id=e.company_id AND a.user_id=e.user_id
+    WHERE e.company_id=? AND e.user_id=? AND a.checked_in_at<=? AND (a.checked_out_at IS NULL OR a.checked_out_at>=?)
+    ORDER BY e.recorded_at`).all(companyId,targetId,new Date(Date.parse(to)+2*86400000).toISOString(),new Date(Date.parse(from)-2*86400000).toISOString());
+  const evidenceByDay=new Map();
+  for(const row of rows){const day=tehranDate(new Date(row.checked_in_at));if(day<from||day>to)continue;
+    const amounts=reportedOfflineMinutes(row,deviceEvents.filter(e=>e.attendance_id===row.id));
+    const previous=evidenceByDay.get(day)||{gps_off_minutes:0,internet_off_minutes:0};
+    for(const key of Object.keys(previous))previous[key]+=amounts[key];evidenceByDay.set(day,previous);}
   const assignment=db.prepare(`SELECT s.duty_minutes,s.daily_ot_cap,s.start_time,s.end_time,s.schedule_kind,s.schedule_json FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
     WHERE a.company_id=? AND a.user_id=?`).get(companyId,targetId);
   const requests=db.prepare(`SELECT type,work_date,COALESCE(end_date,work_date) end_date,minutes FROM personnel_requests
@@ -66,6 +76,7 @@ function buildWorkReport(companyId,targetId,from,to,official) {
     const metrics=attendanceMetrics(assignment,day,parts,policy);
     const classification=byDate.get(day);
     days.push({...dailyWork({day,...metrics,duty:dutyForDay(assignment,day),overtimeCap:assignment?.daily_ot_cap??27,hasShift:!!assignment,approved:requests.filter(r=>r.work_date<=day&&r.end_date>=day),holiday:classification.is_official_holiday||classification.is_manual_holiday}),
+      ...(evidenceByDay.get(day)||{gps_off_minutes:0,internet_off_minutes:0}),
       jalali:classification.jalali,is_official_holiday:classification.is_official_holiday,is_manual_holiday:classification.is_manual_holiday,
       holiday_title:classification.title,holiday_source:classification.source});cursor.setUTCDate(cursor.getUTCDate()+1);}
   return {user_id:targetId,from,to,days,totals:sumWork(days),authoritative:false,engine:'hozoryar-work-v5',reference:'Khatyar ShiftCalc rules; independent online calendar',
@@ -407,7 +418,7 @@ async function api(req,res,url) {
   }
   if (path==='/api/settings' && method==='GET') {
     owner(user);const s=settings(user.company_id);
-    return json(res,200,{map_provider:s.map_provider,sms_provider:s.sms_provider,require_location:!!s.require_location,geofence_lat:s.geofence_lat,geofence_lng:s.geofence_lng,geofence_radius_m:s.geofence_radius_m,approval_steps:s.approval_steps,annual_leave_minutes:s.annual_leave_minutes,features:JSON.parse(s.features_json),neshan_key_configured:!!s.neshan_api_key,sms_key_configured:!!s.sms_api_key});
+    return json(res,200,{map_provider:s.map_provider,sms_provider:s.sms_provider,require_location:!!s.require_location,enforce_shift_window:!!s.enforce_shift_window,geofence_lat:s.geofence_lat,geofence_lng:s.geofence_lng,geofence_radius_m:s.geofence_radius_m,approval_steps:s.approval_steps,annual_leave_minutes:s.annual_leave_minutes,features:JSON.parse(s.features_json),neshan_key_configured:!!s.neshan_api_key,sms_key_configured:!!s.sms_api_key});
   }
   if (path==='/api/settings' && method==='PATCH') {
     owner(user);const b=await body(req);const s=settings(user.company_id);
@@ -419,20 +430,31 @@ async function api(req,res,url) {
     if(b.geofence_lng!==undefined && b.geofence_lng!==null && (!Number.isFinite(b.geofence_lng)||Math.abs(b.geofence_lng)>180)) throw fail(400,'طول جغرافیایی نامعتبر است');
     if(b.geofence_radius_m!==undefined && (!Number.isInteger(b.geofence_radius_m)||b.geofence_radius_m<50||b.geofence_radius_m>50000)) throw fail(400,'شعاع نامعتبر است');
     if(b.approval_steps!==undefined && ![1,2].includes(b.approval_steps))throw fail(400,'تعداد مراحل تأیید نامعتبر است');
+    if(b.enforce_shift_window!==undefined&&typeof b.enforce_shift_window!=='boolean')throw fail(400,'سیاست بازه مجاز تردد نامعتبر است');
     if(b.annual_leave_minutes!==undefined&&(!Number.isInteger(b.annual_leave_minutes)||b.annual_leave_minutes<0||b.annual_leave_minutes>525600))throw fail(400,'سقف سالانه مرخصی نامعتبر است');
     const f=b.features===undefined?JSON.parse(s.features_json):b.features;
     if(!f||typeof f!=='object'||Array.isArray(f)||Object.keys(f).some(k=>!['liveMap','attendance','monitoring','shifts','sms'].includes(k))||Object.values(f).some(v=>typeof v!=='boolean')) throw fail(400,'تنظیمات قابلیت‌ها نامعتبر است');
-    db.prepare(`UPDATE company_settings SET map_provider=?,neshan_api_key=?,sms_provider=?,sms_api_key=?,require_location=?,geofence_lat=?,geofence_lng=?,geofence_radius_m=?,approval_steps=?,annual_leave_minutes=?,features_json=? WHERE company_id=?`)
-      .run(b.map_provider??s.map_provider,b.neshan_api_key===undefined?s.neshan_api_key:b.neshan_api_key,b.sms_provider??s.sms_provider,b.sms_api_key===undefined?s.sms_api_key:b.sms_api_key,b.require_location===undefined?s.require_location:Number(!!b.require_location),b.geofence_lat===undefined?s.geofence_lat:b.geofence_lat,b.geofence_lng===undefined?s.geofence_lng:b.geofence_lng,b.geofence_radius_m??s.geofence_radius_m,b.approval_steps??s.approval_steps,b.annual_leave_minutes??s.annual_leave_minutes,JSON.stringify(f),user.company_id);
+    db.prepare(`UPDATE company_settings SET map_provider=?,neshan_api_key=?,sms_provider=?,sms_api_key=?,require_location=?,enforce_shift_window=?,geofence_lat=?,geofence_lng=?,geofence_radius_m=?,approval_steps=?,annual_leave_minutes=?,features_json=? WHERE company_id=?`)
+      .run(b.map_provider??s.map_provider,b.neshan_api_key===undefined?s.neshan_api_key:b.neshan_api_key,b.sms_provider??s.sms_provider,b.sms_api_key===undefined?s.sms_api_key:b.sms_api_key,b.require_location===undefined?s.require_location:Number(!!b.require_location),b.enforce_shift_window===undefined?s.enforce_shift_window:Number(b.enforce_shift_window),b.geofence_lat===undefined?s.geofence_lat:b.geofence_lat,b.geofence_lng===undefined?s.geofence_lng:b.geofence_lng,b.geofence_radius_m??s.geofence_radius_m,b.approval_steps??s.approval_steps,b.annual_leave_minutes??s.annual_leave_minutes,JSON.stringify(f),user.company_id);
     audit(user,'settings.update','company',user.company_id);return json(res,200,{ok:true});
   }
   if (path==='/api/attendance' && method==='POST') {
     feature(user,'attendance');const b=await body(req),s=settings(user.company_id);
     if(!['in','out'].includes(b.action)) throw fail(400,'عملیات نامعتبر است');
+    if(b.event_id!==undefined&&(!/^[-a-zA-Z0-9_]{16,64}$/.test(b.event_id)||typeof b.event_id!=='string'))throw fail(400,'شناسه یکتای ثبت تردد نامعتبر است');
+    // A network retry of a successfully committed punch returns its original result.
+    // The event is scoped to the authenticated tenant and person, never client-supplied ids.
+    if(b.event_id){const previous=db.prepare('SELECT action,attendance_id,recorded_at FROM attendance_events WHERE company_id=? AND user_id=? AND event_id=?').get(user.company_id,user.id,b.event_id);
+      if(previous){if(previous.action!==b.action)throw fail(409,'شناسه رویداد قبلاً برای عملیات دیگری استفاده شده است');
+        return json(res,200,{id:previous.attendance_id,at:previous.recorded_at,replayed:true});}}
     if(b.action==='in' && s.require_location && !validCoords(b.lat,b.lng,b.accuracy)) throw fail(400,'موقعیت مکانی معتبر لازم است');
     if(b.action==='in' && s.geofence_lat!==null && s.geofence_lng!==null && (!validCoords(b.lat,b.lng,b.accuracy)||distance(b.lat,b.lng,s.geofence_lat,s.geofence_lng)>s.geofence_radius_m)) throw fail(403,'خارج از محدوده مجاز هستید');
+    if(s.enforce_shift_window){const shift=db.prepare(`SELECT s.* FROM assignments a JOIN shifts s ON s.id=a.shift_id AND s.company_id=a.company_id
+      WHERE a.company_id=? AND a.user_id=?`).get(user.company_id,user.id);
+      if(!allowedShiftTraffic(shift,Date.now(),b.action))throw fail(403,'ثبت تردد خارج از بازه مجاز شیفت است');}
     const now=new Date().toISOString();let id;
-    if(b.action==='in') {
+    db.exec('BEGIN IMMEDIATE');
+    try{if(b.action==='in') {
       if(db.prepare('SELECT id FROM attendance WHERE company_id=? AND user_id=? AND checked_out_at IS NULL').get(user.company_id,user.id)) throw fail(409,'حضور فعال دارید');
       id=Number(db.prepare('INSERT INTO attendance(company_id,user_id,checked_in_at,lat,lng,accuracy) VALUES(?,?,?,?,?,?)').run(user.company_id,user.id,now,b.lat??null,b.lng??null,b.accuracy??null).lastInsertRowid);
     } else {
@@ -440,12 +462,64 @@ async function api(req,res,url) {
       if(!active) throw fail(409,'حضور فعالی برای خروج ندارید');
       id=active.id;db.prepare('UPDATE attendance SET checked_out_at=? WHERE id=? AND company_id=?').run(now,id,user.company_id);
     }
-    audit(user,'attendance.'+b.action,'attendance',id);return json(res,201,{id,at:now});
+    if(b.event_id)db.prepare('INSERT INTO attendance_events(company_id,user_id,event_id,action,attendance_id,recorded_at) VALUES(?,?,?,?,?,?)')
+      .run(user.company_id,user.id,b.event_id,b.action,id,now);
+    audit(user,'attendance.'+b.action,'attendance',id);
+    db.exec('COMMIT');return json(res,201,{id,at:now,replayed:false});
+    }catch(error){db.exec('ROLLBACK');throw error;}
   }
   if (path==='/api/attendance' && method==='GET') {
     feature(user,'attendance');let id=user.id;
     if(url.searchParams.has('user_id')) {admin(user);id=Number(url.searchParams.get('user_id'));if(!ownUser(user,id)) throw fail(404,'کارمند یافت نشد');}
     return json(res,200,{items:db.prepare('SELECT id,checked_in_at,checked_out_at,lat,lng FROM attendance WHERE company_id=? AND user_id=? ORDER BY id DESC LIMIT 100').all(user.company_id,id)});
+  }
+  const correctionMatch=/^\/api\/attendance\/(\d+)\/(correct|corrections)$/.exec(path);
+  if(correctionMatch){admin(user);const attendanceId=Number(correctionMatch[1]),action=correctionMatch[2];
+    const target=db.prepare('SELECT id,user_id,checked_in_at,checked_out_at FROM attendance WHERE id=? AND company_id=?').get(attendanceId,user.company_id);
+    if(!target)throw fail(404,'تردد یافت نشد');
+    if(action==='corrections'&&method==='GET')return json(res,200,{items:db.prepare(`SELECT c.old_in,c.old_out,c.new_in,c.new_out,c.reason,c.created_at,u.name actor_name
+      FROM attendance_corrections c JOIN users u ON u.id=c.actor_user_id AND u.company_id=c.company_id
+      WHERE c.company_id=? AND c.attendance_id=? ORDER BY c.id DESC`).all(user.company_id,attendanceId)});
+    if(action==='correct'&&method==='POST'){
+      const b=await body(req),iso=v=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v)&&!Number.isNaN(Date.parse(v))&&new Date(v).toISOString()===v;
+      if(!iso(b.checked_in_at)||!iso(b.checked_out_at)||!str(b.reason,500)||b.reason.trim().length<8)throw fail(400,'تاریخ ورود، خروج یا دلیل اصلاح نامعتبر است');
+      const from=Date.parse(b.checked_in_at),to=Date.parse(b.checked_out_at);
+      if(to<=from||to-from>24*3600000)throw fail(400,'طول تردد اصلاحی نامعتبر است');
+      db.exec('BEGIN IMMEDIATE');
+      try{
+        const current=db.prepare('SELECT checked_in_at,checked_out_at FROM attendance WHERE id=? AND company_id=?').get(attendanceId,user.company_id);
+        if(!current?.checked_out_at)throw fail(409,'تردد باز قابل اصلاح نیست؛ ابتدا خروج ثبت شود');
+        const archives=db.prepare('SELECT snapshot_json FROM work_month_archives WHERE company_id=?').all(user.company_id);
+        const originalFrom=tehranDate(new Date(current.checked_in_at)),originalTo=tehranDate(new Date(current.checked_out_at));
+        const proposedFrom=tehranDate(new Date(from)),proposedTo=tehranDate(new Date(to));
+        for(const item of archives){const a=JSON.parse(item.snapshot_json);
+          if((originalFrom<=a.to&&originalTo>=a.from)||(proposedFrom<=a.to&&proposedTo>=a.from))throw fail(409,'اصلاح تردد در دوره بایگانی‌شده مجاز نیست');}
+        const conflict=db.prepare(`SELECT 1 FROM attendance WHERE company_id=? AND user_id=? AND id<>?
+          AND checked_in_at<? AND (checked_out_at IS NULL OR checked_out_at>?) LIMIT 1`).get(user.company_id,target.user_id,attendanceId,b.checked_out_at,b.checked_in_at);
+        if(conflict)throw fail(409,'بازه اصلاحی با تردد دیگری تداخل دارد');
+        db.prepare('UPDATE attendance SET checked_in_at=?,checked_out_at=? WHERE company_id=? AND id=?')
+          .run(b.checked_in_at,b.checked_out_at,user.company_id,attendanceId);
+        db.prepare(`INSERT INTO attendance_corrections(company_id,attendance_id,actor_user_id,old_in,old_out,new_in,new_out,reason)
+          VALUES(?,?,?,?,?,?,?,?)`).run(user.company_id,attendanceId,user.id,current.checked_in_at,current.checked_out_at,b.checked_in_at,b.checked_out_at,b.reason.trim());
+        audit(user,'attendance.correct','attendance',attendanceId);db.exec('COMMIT');return json(res,200,{ok:true});
+      }catch(error){db.exec('ROLLBACK');throw error;}
+    }
+    throw fail(405,'روش نامعتبر است');
+  }
+  if(path==='/api/monitoring/event'&&method==='POST'){
+    feature(user,'monitoring');const b=await body(req);
+    if(!['gps_off','gps_on','internet_off','internet_on'].includes(b.kind))throw fail(400,'نوع رویداد نظارتی نامعتبر است');
+    const active=db.prepare('SELECT id FROM attendance WHERE company_id=? AND user_id=? AND checked_out_at IS NULL').get(user.company_id,user.id);
+    if(!active)throw fail(403,'ثبت رویداد فقط در حضور فعال مجاز است');
+    const result=db.prepare('INSERT INTO monitoring_events(company_id,user_id,attendance_id,kind,recorded_at) VALUES(?,?,?,?,?)')
+      .run(user.company_id,user.id,active.id,b.kind,new Date().toISOString());
+    return json(res,201,{id:Number(result.lastInsertRowid),evidence_only:true});
+  }
+  if(path==='/api/monitoring/events'&&method==='GET'){
+    admin(user);feature(user,'monitoring');const targetId=Number(url.searchParams.get('user_id'));
+    if(!Number.isInteger(targetId)||!ownUser(user,targetId))throw fail(404,'کارمند یافت نشد');
+    return json(res,200,{items:db.prepare(`SELECT kind,recorded_at,attendance_id FROM monitoring_events
+      WHERE company_id=? AND user_id=? ORDER BY id DESC LIMIT 250`).all(user.company_id,targetId),evidence_only:true});
   }
   if (path==='/api/location' && method==='POST') {
     feature(user,'monitoring');const b=await body(req);

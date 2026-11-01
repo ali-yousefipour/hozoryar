@@ -31,6 +31,28 @@ export function segmentDefinitions(shift,day){
   const cfg=JSON.parse(shift.schedule_json||'{}'),weekday=new Date(day+'T12:00:00Z').getUTCDay();
   return cfg.weekly?.[weekday]||[];
 }
+// Khatyar uses a per-segment traffic window (default one hour either side).
+// A previous day's overnight shift can still authorize an early-morning checkout.
+export function allowedShiftTraffic(shift,at,action){
+  if(!shift)return false;
+  const config=JSON.parse(shift.schedule_json||'{}');
+  if(config.allow_offday||['floating','auto'].includes(shift.schedule_kind))return true;
+  const now=typeof at==='number'?at:new Date(at).getTime();
+  if(!Number.isFinite(now))return false;
+  const today=tehranDate(new Date(now));
+  const previous=new Date(Date.parse(today+'T12:00:00Z')-86400000).toISOString().slice(0,10);
+  for(const day of [today,previous]){
+    const segments=shift.schedule_kind==='advanced'?segmentDefinitions(shift,day):dutyForDay(shift,day)>0?[{s:shift.start_time,e:shift.end_time}]:[];
+    for(const segment of segments){
+      const start=minuteOfValue(segment.s),end=minuteOfValue(segment.e);
+      const begin=localInstant(day,start),finish=localInstant(day,end<=start?end+1440:end);
+      const earliest=action==='in'?begin-3600000:finish-3600000;
+      const latest=action==='in'?begin+3600000:finish+3600000;
+      if(now>=earliest&&now<=latest)return true;
+    }
+  }
+  return false;
+}
 const nextDateBoundary = ms => {
   const day=tehranDate(new Date(ms));let low=ms+1,high=ms+48*3600000;
   while(low<high){const mid=Math.floor((low+high)/2);if(tehranDate(new Date(mid))===day)low=mid+1;else high=mid;}
@@ -150,6 +172,6 @@ export function dailyWork({day,worked=0,duty=0,approved=[],holiday=false,overtim
     regular_extra:!friday&&!holiday?extra:0};
 }
 export function sumWork(rows) {
-  const keys=['worked','in_shift','expected','leave','unpaid_leave','mission','shortage','absence','absence_days','absence_and_shortage','surplus','overtime','night','late_in','early_out','total_overtime','friday_work','holiday_work','regular_extra'];
-  return Object.fromEntries(keys.map(k=>[k,rows.reduce((total,r)=>total+r[k],0)]));
+  const keys=['worked','in_shift','expected','leave','unpaid_leave','mission','shortage','absence','absence_days','absence_and_shortage','surplus','overtime','night','late_in','early_out','total_overtime','friday_work','holiday_work','regular_extra','gps_off_minutes','internet_off_minutes'];
+  return Object.fromEntries(keys.map(k=>[k,rows.reduce((total,r)=>total+(r[k]||0),0)]));
 }

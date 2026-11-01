@@ -56,6 +56,31 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       ON attendance(company_id,user_id) WHERE checked_out_at IS NULL;
     CREATE INDEX IF NOT EXISTS attendance_company_date
       ON attendance(company_id,checked_in_at);
+    CREATE TABLE IF NOT EXISTS attendance_events (
+      company_id INTEGER NOT NULL,user_id INTEGER NOT NULL,event_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('in','out')),
+      attendance_id INTEGER NOT NULL,recorded_at TEXT NOT NULL,
+      PRIMARY KEY(company_id,user_id,event_id),
+      FOREIGN KEY(company_id,user_id) REFERENCES users(company_id,id),
+      FOREIGN KEY(attendance_id) REFERENCES attendance(id)
+    );
+    CREATE TABLE IF NOT EXISTS monitoring_events (
+      id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,user_id INTEGER NOT NULL,
+      attendance_id INTEGER NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('gps_off','gps_on','internet_off','internet_on')),
+      recorded_at TEXT NOT NULL,
+      FOREIGN KEY(company_id,user_id) REFERENCES users(company_id,id),
+      FOREIGN KEY(attendance_id) REFERENCES attendance(id)
+    );
+    CREATE INDEX IF NOT EXISTS monitoring_attendance_events ON monitoring_events(company_id,user_id,attendance_id,recorded_at);
+    CREATE TABLE IF NOT EXISTS attendance_corrections (
+      id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,attendance_id INTEGER NOT NULL,
+      actor_user_id INTEGER NOT NULL,old_in TEXT NOT NULL,old_out TEXT NOT NULL,
+      new_in TEXT NOT NULL,new_out TEXT NOT NULL,reason TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(company_id,actor_user_id) REFERENCES users(company_id,id),
+      FOREIGN KEY(attendance_id) REFERENCES attendance(id)
+    );
+    CREATE INDEX IF NOT EXISTS attendance_corrections_lookup ON attendance_corrections(company_id,attendance_id,id);
     CREATE TABLE IF NOT EXISTS locations (
       company_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
       lat REAL NOT NULL, lng REAL NOT NULL, accuracy REAL,
@@ -78,6 +103,7 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
       geofence_lat REAL, geofence_lng REAL,
       geofence_radius_m INTEGER NOT NULL DEFAULT 300,
       require_location INTEGER NOT NULL DEFAULT 1,
+      enforce_shift_window INTEGER NOT NULL DEFAULT 0 CHECK(enforce_shift_window IN (0,1)),
       approval_steps INTEGER NOT NULL DEFAULT 1 CHECK(approval_steps IN (1,2)),
       annual_leave_minutes INTEGER NOT NULL DEFAULT 12480 CHECK(annual_leave_minutes BETWEEN 0 AND 525600),
       features_json TEXT NOT NULL DEFAULT '{"liveMap":true,"attendance":true,"monitoring":true,"shifts":true,"sms":false}'
@@ -167,6 +193,7 @@ export function openDatabase(path = process.env.DB_PATH || 'data/hozoryar.sqlite
   }
   if(!settingColumns.includes('approval_steps'))db.exec('ALTER TABLE company_settings ADD COLUMN approval_steps INTEGER NOT NULL DEFAULT 1 CHECK(approval_steps IN (1,2))');
   if(!settingColumns.includes('annual_leave_minutes'))db.exec('ALTER TABLE company_settings ADD COLUMN annual_leave_minutes INTEGER NOT NULL DEFAULT 12480 CHECK(annual_leave_minutes BETWEEN 0 AND 525600)');
+  if(!settingColumns.includes('enforce_shift_window'))db.exec('ALTER TABLE company_settings ADD COLUMN enforce_shift_window INTEGER NOT NULL DEFAULT 0 CHECK(enforce_shift_window IN (0,1))');
   const shiftColumns=db.prepare('PRAGMA table_info(shifts)').all().map(x=>x.name);
   if(!shiftColumns.includes('schedule_kind'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_kind TEXT NOT NULL DEFAULT 'fixed'");
   if(!shiftColumns.includes('schedule_json'))db.exec("ALTER TABLE shifts ADD COLUMN schedule_json TEXT NOT NULL DEFAULT '{}'");

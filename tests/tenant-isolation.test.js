@@ -61,6 +61,31 @@ test('attendance, location, live map are isolated across tenants',async()=>{
   assert.equal((await api('/api/location',a,'POST',{lat:36.3,lng:59.6})).status,403);
 });
 
+test('attendance retry keys are transactional, replay-safe and scoped to each company',async()=>{
+  const inKey='mobile-test-punch-0001',outKey='mobile-test-punch-0002';
+  const first=await api('/api/attendance',a,'POST',{action:'in',lat:36.3,lng:59.6,event_id:inKey});
+  assert.equal(first.status,201);
+  const replay=await api('/api/attendance',a,'POST',{action:'in',event_id:inKey});
+  assert.equal(replay.status,200);assert.equal(replay.body.replayed,true);assert.equal(replay.body.id,first.body.id);
+  assert.equal((await api('/api/attendance',a,'POST',{action:'out',event_id:inKey})).status,409);
+  const foreign=await api('/api/attendance',b,'POST',{action:'in',lat:35.1,lng:51.1,event_id:inKey});
+  assert.equal(foreign.status,201);assert.notEqual(foreign.body.id,first.body.id);
+  assert.equal((await api('/api/attendance',a,'POST',{action:'out',event_id:outKey})).status,201);
+  assert.equal((await api('/api/attendance',a,'POST',{action:'out',event_id:outKey})).body.replayed,true);
+  assert.equal((await api('/api/attendance',b,'POST',{action:'out',event_id:outKey})).status,201);
+});
+
+test('monitoring evidence is tenant-scoped and requires active attendance',async()=>{
+  assert.equal((await api('/api/monitoring/event',a,'POST',{kind:'gps_off'})).status,403);
+  assert.equal((await api('/api/monitoring/event',a,'POST',{kind:'unknown'})).status,400);
+  assert.equal((await api('/api/attendance',a,'POST',{action:'in',lat:36.3,lng:59.6})).status,201);
+  assert.equal((await api('/api/monitoring/event',a,'POST',{kind:'gps_off'})).status,201);
+  assert.equal((await api('/api/monitoring/events?user_id=1',a)).body.items[0].kind,'gps_off');
+  assert.equal((await api('/api/monitoring/events?user_id=1',b)).status,404);
+  assert.equal((await api('/api/attendance',a,'POST',{action:'out'})).status,201);
+  assert.equal((await api('/api/monitoring/event',a,'POST',{kind:'gps_on'})).status,403);
+});
+
 test('cannot assign another tenant employee or shift',async()=>{
   const shift=(await api('/api/shifts',a,'POST',{name:'روز',start_time:'08:00',end_time:'16:00',duty_minutes:480}));
   assert.equal(shift.status,201);
@@ -384,4 +409,38 @@ test('automatic shift enforces its custom duty bounds and stays inside company',
   const created=await api('/api/shifts',a,'POST',{...base,schedule:{auto_expected_min:453}});
   assert.equal(created.status,201);
   assert.equal((await api('/api/shifts',b)).body.items.some(s=>s.id===created.body.id),false);
+});
+
+test('company shift-window policy defaults off and rejects out-of-window attendance when enabled',async()=>{
+  assert.equal((await api('/api/settings',a)).body.enforce_shift_window,false);
+  const shift=await api('/api/shifts',a,'POST',{name:'روز بدون بازه',start_time:'08:00',end_time:'17:00',duty_minutes:480,
+    schedule_kind:'advanced',schedule:{weekly:{0:[],1:[],2:[],3:[],4:[],5:[],6:[]}}});
+  assert.equal(shift.status,201);
+  assert.equal((await api('/api/assignments',a,'POST',{user_id:1,shift_id:shift.body.id})).status,200);
+  assert.equal((await api('/api/settings',a,'PATCH',{enforce_shift_window:true})).status,200);
+  assert.equal((await api('/api/attendance',a,'POST',{action:'in',lat:36.3,lng:59.6})).status,403);
+  assert.equal((await api('/api/settings',b)).body.enforce_shift_window,false);
+  assert.equal((await api('/api/settings',a,'PATCH',{enforce_shift_window:false})).status,200);
+});
+
+test('attendance corrections are audited, tenant-scoped and reject archived or overlapping periods',async()=>{
+  const staff=(await api('/api/login',null,'POST',{company:'alpha',username:'staff',password:'strong-password-123'})).body.token;
+  const write=openDatabase(process.env.DB_PATH);
+  const id=Number(write.prepare('INSERT INTO attendance(company_id,user_id,checked_in_at,checked_out_at) VALUES(?,?,?,?)')
+    .run(1,3,'2026-09-01T06:00:00.000Z','2026-09-01T08:00:00.000Z').lastInsertRowid);
+  const archiveId=Number(write.prepare('INSERT INTO attendance(company_id,user_id,checked_in_at,checked_out_at) VALUES(?,?,?,?)')
+    .run(1,3,'2026-10-05T06:00:00.000Z','2026-10-05T08:00:00.000Z').lastInsertRowid);
+  write.close();
+  const path='/api/attendance/'+id+'/correct';
+  const payload={checked_in_at:'2026-09-01T06:30:00.000Z',checked_out_at:'2026-09-01T09:00:00.000Z',reason:'اصلاح با بررسی گزارش ورود و خروج'};
+  assert.equal((await api(path,staff,'POST',payload)).status,403);
+  assert.equal((await api(path,b,'POST',payload)).status,404);
+  assert.equal((await api(path,a,'POST',payload)).status,200);
+  const history=(await api('/api/attendance/'+id+'/corrections',a)).body.items;
+  assert.equal(history.length,1);assert.equal(history[0].old_in,'2026-09-01T06:00:00.000Z');
+  assert.equal(history[0].new_out,payload.checked_out_at);assert.equal(history[0].actor_name,'مدیر شرکت الف');
+  assert.equal((await api('/api/attendance/'+id+'/corrections',b)).status,404);
+  assert.equal((await api(path,a,'POST',{...payload,checked_out_at:'2026-09-01T07:00:00.000Z',reason:'کوتاه'})).status,400);
+  assert.equal((await api(path,a,'POST',{...payload,checked_in_at:'2026-10-06T06:30:00.000Z',checked_out_at:'2026-10-06T09:00:00.000Z'})).status,409);
+  assert.equal((await api('/api/attendance/'+archiveId+'/correct',a,'POST',payload)).status,409);
 });
