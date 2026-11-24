@@ -50,9 +50,13 @@ def connect(username, password):
         ftp.auth()
         if sha256(ftp.sock.getpeercert(binary_form=True)).digest() != expected:
             raise RuntimeError('FTP certificate differs from the committed host pin')
-        ftp.login(username, password)
+        try:
+            ftp.login(username, password)
+        except error_perm as error:
+            raise RuntimeError('FTP login rejected (reply ' + str(error)[:3] + '); check repository secrets ftp/pass.') from None
         ftp.prot_p()
         ftp.set_pasv(True)
+        print('Encrypted FTP authentication completed.', flush=True)
         return ftp
     except Exception:
         ftp.close()
@@ -97,7 +101,10 @@ def publish(ftp, files, commit, run_id):
         raise ValueError('Invalid commit or deployment run identifier')
     # Never infer a different root or create a guessed public_html in a jailed account.
     root = ftp.pwd()
-    ftp.cwd(PUBLIC)
+    try:
+        ftp.cwd(PUBLIC)
+    except error_perm:
+        raise RuntimeError('public_html is not accessible from the FTP login root; no release files uploaded.') from None
     ftp.cwd(root)
     old_index = read(ftp, PUBLIC + '/index.php', optional=True)
     marker = read(ftp, PRIVATE + '/.hozoryar-instance', optional=True)
@@ -163,6 +170,8 @@ if __name__ == '__main__':
     except Exception as error:
         # Server replies may echo account names; do not print arbitrary FTP exceptions.
         print('Deployment failed (' + type(error).__name__ + '). Previous releases/configuration were preserved.', file=sys.stderr)
+        if isinstance(error, error_perm):
+            print('FTP server reply code: ' + str(error)[:3], file=sys.stderr)
         if isinstance(error, (ValueError, RuntimeError)):
             print(str(error), file=sys.stderr)
         sys.exit(1)
