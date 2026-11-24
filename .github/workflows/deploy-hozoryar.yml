@@ -34,8 +34,8 @@ jobs:
           --health-cmd="healthcheck.sh --connect --innodb_initialized"
           --health-interval=5s --health-timeout=5s --health-retries=20
     env:
-      HOZORYAR_CONFIG: ${{ runner.temp }}/hozoryar-ci.php
-      HOZORYAR_PHP_TEST_CONFIG: ${{ runner.temp }}/hozoryar-ci.php
+      HOZORYAR_CONFIG: ${{ github.workspace }}/data/ci-config.php
+      HOZORYAR_PHP_TEST_CONFIG: ${{ github.workspace }}/data/ci-config.php
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -53,6 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p data
           php -r 'file_put_contents(getenv("HOZORYAR_CONFIG"), "<?php return " . var_export(["db_host"=>"127.0.0.1","db_port"=>"3306","db_name"=>"hozoryar_test_ci","db_user"=>"root","db_pass"=>"hozoryar-ci-only-password"], true) . ";\n");'
           php php/cli/migrate.php
           php php/cli/migrate.php
