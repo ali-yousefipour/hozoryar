@@ -99,52 +99,55 @@ def write_verified(ftp, path, content, known):
 def publish(ftp, files, commit, run_id):
     if not re.fullmatch(r'[0-9a-f]{40}', commit) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', run_id):
         raise ValueError('Invalid commit or deployment run identifier')
-    # Never infer a different root or create a guessed public_html in a jailed account.
+    # Dedicated FTP accounts can be jailed directly at the operator's public_html.
     root = ftp.pwd()
+    public, private, base = PUBLIC, PRIVATE, 'dirname(__DIR__)'
     try:
         ftp.cwd(PUBLIC)
     except error_perm:
-        raise RuntimeError('public_html is not accessible from the FTP login root; no release files uploaded.') from None
+        names = {PurePosixPath(name.rstrip('/')).name for name in ftp.nlst()}
+        if PUBLIC in names or root not in ('/', '/public_html'):
+            raise RuntimeError('public_html exists but is inaccessible, or the FTP root is ambiguous; no release files uploaded.') from None
+        public, private, base = '.', '_private/hozoryar', '__DIR__'
+        print('Dedicated FTP root maps to public_html; using protected _private/hozoryar.', flush=True)
     ftp.cwd(root)
-    old_index = read(ftp, PUBLIC + '/index.php', optional=True)
-    marker = read(ftp, PRIVATE + '/.hozoryar-instance', optional=True)
+    old_index = read(ftp, public + '/index.php', optional=True)
+    marker = read(ftp, private + '/.hozoryar-instance', optional=True)
     if marker is not None and marker != b'HOZORYAR_DEPLOY_ROOT\n':
         raise RuntimeError('Destination marker belongs to another application')
-    if marker is None and old_index is not None and b'hozoryar/php/app/index.php' not in old_index and b'HOZORYAR_RELEASE' not in old_index:
-        raise RuntimeError('Existing public_html/index.php is not a Hozoryar entry point')
-    if marker is None and read(ftp, PUBLIC + '/index.html', optional=True) is not None:
-        raise RuntimeError('Review existing public_html/index.html before deploying Hozoryar')
     known = set()
-    write_verified(ftp, PRIVATE + '/.htaccess', b'Require all denied\n', known)
-    release = PRIVATE + '/releases/' + commit
+    if public == '.':
+        write_verified(ftp, '_private/.htaccess', b'Require all denied\n', known)
+    write_verified(ftp, private + '/.htaccess', b'Require all denied\n', known)
+    release = private + '/releases/' + commit
     count = 0
     for name, content in sorted(files.items()):
         if name.startswith('hozoryar/'):
             write_verified(ftp, release + '/' + name.removeprefix('hozoryar/'), content, known)
             count += 1
-    config_exists = read(ftp, PRIVATE + '/php/config.php', optional=True) is not None
-    rollback = PRIVATE + '/rollback/' + run_id
-    old_rules = read(ftp, PUBLIC + '/.htaccess', optional=True)
-    old_version = read(ftp, PUBLIC + '/hozoryar-version.json', optional=True)
+    config_exists = read(ftp, private + '/php/config.php', optional=True) is not None
+    rollback = private + '/rollback/' + run_id
+    old_rules = read(ftp, public + '/.htaccess', optional=True)
+    old_version = read(ftp, public + '/hozoryar-version.json', optional=True)
     for name, content in [('index.php', old_index), ('.htaccess', old_rules), ('hozoryar-version.json', old_version)]:
         if content is not None:
             write_verified(ftp, rollback + '/' + name, content, known)
     entry = ("<?php\ndeclare(strict_types=1);\n// HOZORYAR_RELEASE " + commit + "\n"
-             "putenv('HOZORYAR_CONFIG=' . dirname(__DIR__) . '/hozoryar/php/config.php');\n"
-             "require dirname(__DIR__) . '/" + release + "/php/app/index.php';\n").encode()
+             "putenv('HOZORYAR_CONFIG=' . " + base + " . '/" + private + "/php/config.php');\n"
+             "require " + base + " . '/" + release + "/php/app/index.php';\n").encode()
     # All application bytes are verified before switching the one public entry point.
     for name, content in [('.htaccess', files['public_html/.htaccess']), ('index.php', entry),
                           ('hozoryar-version.json', json.dumps({'service': 'hozoryar', 'commit': commit}).encode())]:
-        staged = PRIVATE + '/.pending-' + run_id + '-' + name.lstrip('.')
+        staged = private + '/.pending-' + run_id + '-' + name.lstrip('.')
         write_verified(ftp, staged, content, known)
-        ftp.rename(staged, PUBLIC + '/' + name)
-        if read(ftp, PUBLIC + '/' + name) != content:
+        ftp.rename(staged, public + '/' + name)
+        if read(ftp, public + '/' + name) != content:
             raise RuntimeError('Published entry readback mismatch: ' + name)
-    write_verified(ftp, PRIVATE + '/.hozoryar-instance', b'HOZORYAR_DEPLOY_ROOT\n', known)
+    write_verified(ftp, private + '/.hozoryar-instance', b'HOZORYAR_DEPLOY_ROOT\n', known)
     record = {'commit': commit, 'release': release, 'rollback': rollback,
               'files_verified': count, 'database_config_present': config_exists,
-              'database_migrations_run': False}
-    write_verified(ftp, PRIVATE + '/.deploy-manifest.json', json.dumps(record, indent=2).encode(), known)
+              'database_migrations_run': False, 'ftp_public_directory': public}
+    write_verified(ftp, private + '/.deploy-manifest.json', json.dumps(record, indent=2).encode(), known)
     return record
 
 

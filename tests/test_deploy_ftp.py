@@ -22,21 +22,45 @@ class FakeFTP:
     def mkd(self, path): pass
 
     def retrbinary(self, command, callback):
-        path = command.removeprefix('RETR ')
+        path = command.removeprefix('RETR ').removeprefix('./')
         if path not in self.files:
             raise deploy.error_perm('550 not found')
         callback(self.files[path])
 
     def storbinary(self, command, stream, blocksize):
         content = stream.read()
-        self.files[command.removeprefix('STOR ')] = b'corrupt' if self.corrupt else content
+        self.files[command.removeprefix('STOR ').removeprefix('./')] = b'corrupt' if self.corrupt else content
 
     def rename(self, source, target):
         self.renames.append((source, target))
-        self.files[target] = self.files.pop(source)
+        self.files[target.removeprefix('./')] = self.files.pop(source)
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_jailed_public_root_uses_denied_private_tree(self):
+        class JailedFTP(FakeFTP):
+            def cwd(self, path):
+                if path == 'public_html': raise deploy.error_perm('550 no such directory')
+                super().cwd(path)
+            def nlst(self): return ['index.html']
+        ftp = JailedFTP()
+        ftp.files = {'index.php': b'previous site', '_private/hozoryar/php/config.php': b'existing secret'}
+        record=deploy.publish(ftp, {'hozoryar/php/app/index.php': b'router','public_html/.htaccess': b'rules'}, 'b'*40,'101-1')
+        self.assertEqual(record['ftp_public_directory'], '.')
+        self.assertEqual(ftp.files['_private/.htaccess'], b'Require all denied\n')
+        self.assertEqual(ftp.files['_private/hozoryar/php/config.php'], b'existing secret')
+        self.assertIn(b"require __DIR__ . '/_private/hozoryar/releases/",ftp.files['index.php'])
+        self.assertEqual(ftp.files['_private/hozoryar/rollback/101-1/index.php'],b'previous site')
+
+    def test_inaccessible_public_directory_is_not_treated_as_jail(self):
+        class DeniedFTP(FakeFTP):
+            def cwd(self,path): raise deploy.error_perm('550 denied')
+            def nlst(self): return ['public_html']
+        ftp=DeniedFTP()
+        with self.assertRaisesRegex(RuntimeError,'inaccessible'):
+            deploy.publish(ftp,{},'a'*40,'102-1')
+        self.assertEqual(ftp.renames,[])
+
     def test_verified_release_switch_preserves_config_and_rollback(self):
         ftp = FakeFTP()
         files = {'hozoryar/php/app/index.php': b'new router', 'hozoryar/web/home.html': b'new site',
