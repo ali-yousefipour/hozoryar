@@ -3,6 +3,20 @@ import assert from 'node:assert/strict';
 import {spawn,spawnSync} from 'node:child_process';
 import {once} from 'node:events';
 import net from 'node:net';
+import http from 'node:http';
+
+// PHP's development server closes each connection. Buffer every response so
+// Node's fetch parser cannot retain an unread body on a closed keep-alive socket.
+function httpResponse(url,{method='GET',headers={},body}={}){
+  return new Promise((resolve,reject)=>{
+    const req=http.request(url,{method,headers:{Connection:'close',...headers}},res=>{
+      const chunks=[];
+      res.on('data',chunk=>chunks.push(chunk));res.on('error',reject);
+      res.on('end',()=>{const text=Buffer.concat(chunks).toString('utf8');resolve({status:res.statusCode,
+        headers:{get:name=>res.headers[name.toLowerCase()]},text:async()=>text,json:async()=>JSON.parse(text)});});
+    });req.on('error',reject);req.end(body);
+  });
+}
 
 test('PHP product journey: public site, setup, personnel, shift, punch, request and frozen period',{
   skip:!process.env.HOZORYAR_PHP_TEST_CONFIG,timeout:45000
@@ -16,14 +30,14 @@ test('PHP product journey: public site, setup, personnel, shift, punch, request 
   await new Promise((resolve,reject)=>{server.stderr.on('data',b=>{if(b.toString().includes('Development Server'))resolve();});server.once('error',reject);});
   const base=`http://127.0.0.1:${port}`;
   const api=async(path,token,method='GET',body)=>{
-    const res=await fetch(base+path,{method,headers:{...(token?{Authorization:'Bearer '+token}:{}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
+    const res=await httpResponse(base+path,{method,headers:{...(token?{Authorization:'Bearer '+token}:{}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
     return {status:res.status,body:await res.json()};
   };
   for(const [path,needle] of [['/','از ثبت حضور'],['/login','login-form'],['/index.html','login-form'],['/home.css','hero'],['/product.css','setup-steps']]){
-    const res=await fetch(base+path);assert.equal(res.status,200,path);assert.ok((await res.text()).includes(needle),path);
+    const res=await httpResponse(base+path);assert.equal(res.status,200,path);assert.ok((await res.text()).includes(needle),path);
   }
-  const font=await fetch(base+'/fonts/Vazirmatn-Regular.ttf');assert.equal(font.status,200);assert.match(font.headers.get('content-type'),/font\/ttf/);
-  for(const path of ['/php/config.php','/data/reports-test-config.php','/fonts/../../php/config.php'])assert.equal((await fetch(base+path)).status,404,path);
+  const font=await httpResponse(base+'/fonts/Vazirmatn-Regular.ttf');assert.equal(font.status,200);assert.match(font.headers.get('content-type'),/font\/ttf/);
+  for(const path of ['/php/config.php','/data/reports-test-config.php','/fonts/../../php/config.php'])assert.equal((await httpResponse(base+path)).status,404,path);
   assert.equal((await api('/api/setup')).status,401);
   const login=async(company,username='admin')=>{const r=await api('/api/login',null,'POST',{company,username,password:'TestReports!74pass'});assert.equal(r.status,200);return r.body.token;};
   const owner=await login(fixture.a.company),other=await login(fixture.b.company),employee=await login(fixture.a.company,'employee');
