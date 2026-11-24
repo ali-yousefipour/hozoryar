@@ -1,0 +1,517 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-24T17:32:29.972606+00:00",
+  "title": "Design System: حضوریار",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Primary",
+        "tonalRamp": [
+          "oklch(15% 0.0700 292.58)",
+          "oklch(26% 0.1200 292.58)",
+          "oklch(38% 0.1600 292.58)",
+          "oklch(50% 0.2000 292.58)",
+          "oklch(62% 0.2000 292.58)",
+          "oklch(74% 0.1600 292.58)",
+          "oklch(86% 0.1000 292.58)",
+          "oklch(95% 0.0360 292.58)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "workflow-purple": {
+        "role": "primary",
+        "displayName": "Workflow Purple",
+        "tonalRamp": [
+          "oklch(15% 0.0624 293.74)",
+          "oklch(26% 0.1070 293.74)",
+          "oklch(38% 0.1426 293.74)",
+          "oklch(50% 0.1783 293.74)",
+          "oklch(62% 0.1783 293.74)",
+          "oklch(74% 0.1426 293.74)",
+          "oklch(86% 0.0892 293.74)",
+          "oklch(95% 0.0321 293.74)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-bg": {
+        "role": "neutral",
+        "displayName": "Site Bg",
+        "tonalRamp": [
+          "oklch(15% 0.0014 301.43)",
+          "oklch(26% 0.0025 301.43)",
+          "oklch(38% 0.0033 301.43)",
+          "oklch(50% 0.0041 301.43)",
+          "oklch(62% 0.0041 301.43)",
+          "oklch(74% 0.0033 301.43)",
+          "oklch(86% 0.0020 301.43)",
+          "oklch(95% 0.0007 301.43)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-text": {
+        "role": "neutral",
+        "displayName": "Site Text",
+        "tonalRamp": [
+          "oklch(15% 0.0153 301.39)",
+          "oklch(26% 0.0263 301.39)",
+          "oklch(38% 0.0351 301.39)",
+          "oklch(50% 0.0438 301.39)",
+          "oklch(62% 0.0438 301.39)",
+          "oklch(74% 0.0351 301.39)",
+          "oklch(86% 0.0219 301.39)",
+          "oklch(95% 0.0079 301.39)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-muted": {
+        "role": "neutral",
+        "displayName": "Site Muted",
+        "tonalRamp": [
+          "oklch(15% 0.0120 300.35)",
+          "oklch(26% 0.0205 300.35)",
+          "oklch(38% 0.0274 300.35)",
+          "oklch(50% 0.0342 300.35)",
+          "oklch(62% 0.0342 300.35)",
+          "oklch(74% 0.0274 300.35)",
+          "oklch(86% 0.0171 300.35)",
+          "oklch(95% 0.0062 300.35)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-line": {
+        "role": "neutral",
+        "displayName": "Site Line",
+        "tonalRamp": [
+          "oklch(15% 0.0064 303.39)",
+          "oklch(26% 0.0110 303.39)",
+          "oklch(38% 0.0147 303.39)",
+          "oklch(50% 0.0184 303.39)",
+          "oklch(62% 0.0184 303.39)",
+          "oklch(74% 0.0147 303.39)",
+          "oklch(86% 0.0092 303.39)",
+          "oklch(95% 0.0033 303.39)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-paper": {
+        "role": "neutral",
+        "displayName": "Site Paper",
+        "tonalRamp": [
+          "oklch(15% 0.0000 89.88)",
+          "oklch(26% 0.0000 89.88)",
+          "oklch(38% 0.0000 89.88)",
+          "oklch(50% 0.0000 89.88)",
+          "oklch(62% 0.0000 89.88)",
+          "oklch(74% 0.0000 89.88)",
+          "oklch(86% 0.0000 89.88)",
+          "oklch(95% 0.0000 89.88)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-dark-bg": {
+        "role": "neutral",
+        "displayName": "Site Dark Bg",
+        "tonalRamp": [
+          "oklch(15% 0.0064 294.78)",
+          "oklch(26% 0.0110 294.78)",
+          "oklch(38% 0.0146 294.78)",
+          "oklch(50% 0.0183 294.78)",
+          "oklch(62% 0.0183 294.78)",
+          "oklch(74% 0.0146 294.78)",
+          "oklch(86% 0.0091 294.78)",
+          "oklch(95% 0.0033 294.78)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-dark-text": {
+        "role": "neutral",
+        "displayName": "Site Dark Text",
+        "tonalRamp": [
+          "oklch(15% 0.0049 304.14)",
+          "oklch(26% 0.0084 304.14)",
+          "oklch(38% 0.0111 304.14)",
+          "oklch(50% 0.0139 304.14)",
+          "oklch(62% 0.0139 304.14)",
+          "oklch(74% 0.0111 304.14)",
+          "oklch(86% 0.0070 304.14)",
+          "oklch(95% 0.0025 304.14)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-dark-muted": {
+        "role": "neutral",
+        "displayName": "Site Dark Muted",
+        "tonalRamp": [
+          "oklch(15% 0.0117 301.45)",
+          "oklch(26% 0.0200 301.45)",
+          "oklch(38% 0.0267 301.45)",
+          "oklch(50% 0.0333 301.45)",
+          "oklch(62% 0.0333 301.45)",
+          "oklch(74% 0.0267 301.45)",
+          "oklch(86% 0.0167 301.45)",
+          "oklch(95% 0.0060 301.45)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-dark-line": {
+        "role": "neutral",
+        "displayName": "Site Dark Line",
+        "tonalRamp": [
+          "oklch(15% 0.0155 300.65)",
+          "oklch(26% 0.0265 300.65)",
+          "oklch(38% 0.0354 300.65)",
+          "oklch(50% 0.0442 300.65)",
+          "oklch(62% 0.0442 300.65)",
+          "oklch(74% 0.0354 300.65)",
+          "oklch(86% 0.0221 300.65)",
+          "oklch(95% 0.0080 300.65)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-dark-paper": {
+        "role": "neutral",
+        "displayName": "Site Dark Paper",
+        "tonalRamp": [
+          "oklch(15% 0.0122 299.06)",
+          "oklch(26% 0.0209 299.06)",
+          "oklch(38% 0.0278 299.06)",
+          "oklch(50% 0.0348 299.06)",
+          "oklch(62% 0.0348 299.06)",
+          "oklch(74% 0.0278 299.06)",
+          "oklch(86% 0.0174 299.06)",
+          "oklch(95% 0.0063 299.06)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "site-dark-accent": {
+        "role": "primary",
+        "displayName": "Site Dark Accent",
+        "tonalRamp": [
+          "oklch(15% 0.0355 293.57)",
+          "oklch(26% 0.0608 293.57)",
+          "oklch(38% 0.0810 293.57)",
+          "oklch(50% 0.1013 293.57)",
+          "oklch(62% 0.1013 293.57)",
+          "oklch(74% 0.0810 293.57)",
+          "oklch(86% 0.0506 293.57)",
+          "oklch(95% 0.0182 293.57)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "panel-light-bg": {
+        "role": "neutral",
+        "displayName": "Panel Light Bg",
+        "tonalRamp": [
+          "oklch(15% 0.0019 274.97)",
+          "oklch(26% 0.0033 274.97)",
+          "oklch(38% 0.0043 274.97)",
+          "oklch(50% 0.0054 274.97)",
+          "oklch(62% 0.0054 274.97)",
+          "oklch(74% 0.0043 274.97)",
+          "oklch(86% 0.0027 274.97)",
+          "oklch(95% 0.0010 274.97)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "panel-light-text": {
+        "role": "neutral",
+        "displayName": "Panel Light Text",
+        "tonalRamp": [
+          "oklch(15% 0.0143 296.08)",
+          "oklch(26% 0.0245 296.08)",
+          "oklch(38% 0.0327 296.08)",
+          "oklch(50% 0.0409 296.08)",
+          "oklch(62% 0.0409 296.08)",
+          "oklch(74% 0.0327 296.08)",
+          "oklch(86% 0.0204 296.08)",
+          "oklch(95% 0.0074 296.08)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "panel-light-border": {
+        "role": "neutral",
+        "displayName": "Panel Light Border",
+        "tonalRamp": [
+          "oklch(15% 0.0048 277.05)",
+          "oklch(26% 0.0082 277.05)",
+          "oklch(38% 0.0110 277.05)",
+          "oklch(50% 0.0137 277.05)",
+          "oklch(62% 0.0137 277.05)",
+          "oklch(74% 0.0110 277.05)",
+          "oklch(86% 0.0069 277.05)",
+          "oklch(95% 0.0025 277.05)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "panel-light-muted": {
+        "role": "neutral",
+        "displayName": "Panel Light Muted",
+        "tonalRamp": [
+          "oklch(15% 0.0110 292.14)",
+          "oklch(26% 0.0189 292.14)",
+          "oklch(38% 0.0251 292.14)",
+          "oklch(50% 0.0314 292.14)",
+          "oklch(62% 0.0314 292.14)",
+          "oklch(74% 0.0251 292.14)",
+          "oklch(86% 0.0157 292.14)",
+          "oklch(95% 0.0057 292.14)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "panel-dark-bg": {
+        "role": "neutral",
+        "displayName": "Panel Dark Bg",
+        "tonalRamp": [
+          "oklch(15% 0.0058 279.05)",
+          "oklch(26% 0.0099 279.05)",
+          "oklch(38% 0.0132 279.05)",
+          "oklch(50% 0.0165 279.05)",
+          "oklch(62% 0.0165 279.05)",
+          "oklch(74% 0.0132 279.05)",
+          "oklch(86% 0.0083 279.05)",
+          "oklch(95% 0.0030 279.05)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "panel-dark-surface": {
+        "role": "neutral",
+        "displayName": "Panel Dark Surface",
+        "tonalRamp": [
+          "oklch(15% 0.0062 279.88)",
+          "oklch(26% 0.0106 279.88)",
+          "oklch(38% 0.0141 279.88)",
+          "oklch(50% 0.0176 279.88)",
+          "oklch(62% 0.0176 279.88)",
+          "oklch(74% 0.0141 279.88)",
+          "oklch(86% 0.0088 279.88)",
+          "oklch(95% 0.0032 279.88)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "panel-dark-text": {
+        "role": "neutral",
+        "displayName": "Panel Dark Text",
+        "tonalRamp": [
+          "oklch(15% 0.0048 299.80)",
+          "oklch(26% 0.0082 299.80)",
+          "oklch(38% 0.0109 299.80)",
+          "oklch(50% 0.0137 299.80)",
+          "oklch(62% 0.0137 299.80)",
+          "oklch(74% 0.0109 299.80)",
+          "oklch(86% 0.0068 299.80)",
+          "oklch(95% 0.0025 299.80)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "panel-dark-border": {
+        "role": "neutral",
+        "displayName": "Panel Dark Border",
+        "tonalRamp": [
+          "oklch(15% 0.0087 281.70)",
+          "oklch(26% 0.0149 281.70)",
+          "oklch(38% 0.0199 281.70)",
+          "oklch(50% 0.0248 281.70)",
+          "oklch(62% 0.0248 281.70)",
+          "oklch(74% 0.0199 281.70)",
+          "oklch(86% 0.0124 281.70)",
+          "oklch(95% 0.0045 281.70)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "panel-dark-muted": {
+        "role": "neutral",
+        "displayName": "Panel Dark Muted",
+        "tonalRamp": [
+          "oklch(15% 0.0085 288.50)",
+          "oklch(26% 0.0146 288.50)",
+          "oklch(38% 0.0194 288.50)",
+          "oklch(50% 0.0243 288.50)",
+          "oklch(62% 0.0243 288.50)",
+          "oklch(74% 0.0194 288.50)",
+          "oklch(86% 0.0121 288.50)",
+          "oklch(95% 0.0044 288.50)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "panel-dark-action": {
+        "role": "primary",
+        "displayName": "Panel Dark Action",
+        "tonalRamp": [
+          "oklch(15% 0.0700 293.01)",
+          "oklch(26% 0.1200 293.01)",
+          "oklch(38% 0.1600 293.01)",
+          "oklch(50% 0.2000 293.01)",
+          "oklch(62% 0.2000 293.01)",
+          "oklch(74% 0.1600 293.01)",
+          "oklch(86% 0.1000 293.01)",
+          "oklch(95% 0.0360 293.01)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "success": {
+        "role": "neutral",
+        "displayName": "Success",
+        "tonalRamp": [
+          "oklch(15% 0.0480 150.07)",
+          "oklch(26% 0.0823 150.07)",
+          "oklch(38% 0.1097 150.07)",
+          "oklch(50% 0.1371 150.07)",
+          "oklch(62% 0.1371 150.07)",
+          "oklch(74% 0.1097 150.07)",
+          "oklch(86% 0.0686 150.07)",
+          "oklch(95% 0.0247 150.07)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      },
+      "danger": {
+        "role": "neutral",
+        "displayName": "Danger",
+        "tonalRamp": [
+          "oklch(15% 0.0667 27.52)",
+          "oklch(26% 0.1143 27.52)",
+          "oklch(38% 0.1524 27.52)",
+          "oklch(50% 0.1905 27.52)",
+          "oklch(62% 0.1905 27.52)",
+          "oklch(74% 0.1524 27.52)",
+          "oklch(86% 0.0952 27.52)",
+          "oklch(95% 0.0343 27.52)"
+        ],
+        "tonalRampPurpose": "Synthesized preview metadata only; not implemented application tokens."
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Website hero",
+        "purpose": "Public-site headline only."
+      },
+      "panel-metric": {
+        "displayName": "Panel metric",
+        "purpose": "Operational numeric summaries; tabular numerals."
+      }
+    },
+    "shadows": [
+      {
+        "name": "panel-login",
+        "value": "0 20px 60px #0003",
+        "purpose": "Contextual login card exception."
+      },
+      {
+        "name": "panel-mobile-menu",
+        "value": "0 20px 70px #0009",
+        "purpose": "Open mobile sidebar overlay."
+      }
+    ],
+    "motion": [
+      {
+        "name": "panel-nav",
+        "value": "background .18s,color .18s",
+        "purpose": "Navigation state transition; disabled under reduced motion."
+      },
+      {
+        "name": "toast",
+        "value": "opacity .18s",
+        "purpose": "Toast visibility transition."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "site-stack",
+        "value": "850px"
+      },
+      {
+        "name": "site-narrow",
+        "value": "520px"
+      },
+      {
+        "name": "panel-medium",
+        "value": "1100px"
+      },
+      {
+        "name": "panel-mobile",
+        "value": "760px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Website primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Website CTA; fixed saturated purple in both themes.",
+      "html": "<a class=\"ds-site-button\" href=\"#\">ورود به حضوریار</a>",
+      "css": ".ds-site-button{display:inline-flex;align-items:center;justify-content:center;background:#6d28d9;color:#fff;text-decoration:none;border-radius:8px;padding:11px 22px;font:600 14px Vazirmatn,Tahoma,sans-serif;min-height:46px}.ds-site-button:hover{background:#5420a8}.ds-site-button:focus-visible{outline:3px solid var(--site-accent,#6d28d9);outline-offset:5px}"
+    },
+    {
+      "name": "Panel primary button",
+      "kind": "button",
+      "refersTo": "panel-button-primary",
+      "description": "Panel action inherits active theme custom properties.",
+      "html": "<button class=\"ds-primary\">ذخیره</button>",
+      "css": ".ds-primary{background:var(--hz-primary,#6d28d9);color:white;border:0;border-radius:8px;padding:12px 20px;min-height:46px;font:750 16px Vazirmatn,Tahoma,sans-serif;cursor:pointer}.ds-primary:hover{background:var(--hz-primary-dark,#5b21b6)}.ds-primary:focus-visible{outline:3px solid #a78bfa;outline-offset:3px}"
+    },
+    {
+      "name": "Panel text field",
+      "kind": "input",
+      "refersTo": "panel-input",
+      "description": "Light-mode field sample; dark source uses a darker field fill and stroke.",
+      "html": "<label class=\"ds-label\" dir=\"rtl\">نام کاربری<input class=\"ds-input\" placeholder=\"نام کاربری\"></label>",
+      "css": ".ds-label{display:grid;gap:7px;font:650 13px Vazirmatn,Tahoma,sans-serif;color:var(--hz-text,#282238)}.ds-input{font:400 16px Vazirmatn,Tahoma,sans-serif;padding:11px 14px;min-height:46px;background:var(--hz-surface,#fff);color:var(--hz-text,#282238);border:1px solid #b9b5c7;border-radius:8px}.ds-input:focus{border-color:#8b5cf6}.ds-input:focus-visible{outline:3px solid #a78bfa;outline-offset:3px}"
+    },
+    {
+      "name": "Panel card",
+      "kind": "card",
+      "refersTo": "panel-card",
+      "description": "Flat operational container; no interaction states for a static section.",
+      "html": "<section class=\"ds-card\" dir=\"rtl\"><h2>درخواست‌ها</h2><p>وضعیت درخواست‌های شرکت</p></section>",
+      "css": ".ds-card{background:var(--hz-surface,#fff);color:var(--hz-text,#282238);border:1px solid var(--panel-border,#dddfe9);border-radius:12px;padding:22px;box-shadow:none;font-family:Vazirmatn,Tahoma,sans-serif}.ds-card h2{font-size:17px}.ds-card p{color:var(--panel-muted,#686579);font-size:13px}"
+    },
+    {
+      "name": "Panel navigation",
+      "kind": "nav",
+      "description": "Light-mode navigation state sample; dark states are context-specific.",
+      "html": "<nav class=\"ds-nav\" dir=\"rtl\" aria-label=\"منوی اصلی\"><button class=\"ds-active\" aria-current=\"page\">داشبورد</button><button>پرسنل</button></nav>",
+      "css": ".ds-nav{display:grid;gap:4px;font-family:Vazirmatn,Tahoma,sans-serif}.ds-nav button{font:400 16px Vazirmatn,Tahoma,sans-serif;background:transparent;text-align:right;color:var(--hz-text,#534b66);border:0;border-radius:8px;padding:10px 14px;min-height:48px;transition:background .18s,color .18s}.ds-nav button:hover{background:#f5f3ff}.ds-nav .ds-active{background:#ede9fe;color:#5b21b6}.ds-nav button:focus-visible{outline:3px solid #a78bfa;outline-offset:3px}@media(prefers-reduced-motion:reduce){.ds-nav button{transition:none}}"
+    },
+    {
+      "name": "Successful status",
+      "kind": "chip",
+      "description": "Noninteractive light-mode status badge; no hover state.",
+      "html": "<span class=\"ds-status\" dir=\"rtl\">ثبت شد</span>",
+      "css": ".ds-status{display:inline-block;padding:5px 10px;border-radius:20px;background:#dcfce7;color:#166534;font:400 12px Vazirmatn,Tahoma,sans-serif}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Operational clarity",
+    "overview": "This is a source-first record of the implemented Persian RTL interface, preserving the purple Hozoryar identity. “Operational clarity” is a descriptive shorthand for the built direction, not a newly approved metaphor or a fabricated workshop result. The public website is editorial and spacious; the administration panel is denser, with light operational neutrals and explicit light/dark/system choice.\n\nPRODUCT.md and branding/BRAND.md remain product and identity authorities. This document records implementation, including differences from older branding recommendations; it does not replace those sources or the generated legacy design-system MASTER. Source precedence for the panel is style.css → nav.css → panel.css → theme.css → product.css. Website home.css imports product.css, then defines its own site tokens.",
+    "keyCharacteristics": [
+      "Persian RTL reading and navigation with self-hosted web Vazirmatn.",
+      "Purple identity, restrained operational surfaces, explicit theme choice.",
+      "Separate website and panel palettes; local overrides remain contextual."
+    ],
+    "rules": [
+      {
+        "name": "The Surface Context Rule",
+        "body": "Resolve colors against the actual website or panel cascade and active theme before extending a screen.",
+        "section": "colors"
+      },
+      {
+        "name": "The Flat Operations Rule",
+        "body": "Keep administrative cards flat and use borders and theme surfaces for their hierarchy.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do preserve the Persian product name, RTL layout and approved purple identity.",
+      "Do choose tokens from the target surface and active theme, reading the complete stylesheet cascade.",
+      "Do keep visible keyboard focus, meaningful status colors and independent table scrolling.",
+      "Do describe real capabilities and state limitations plainly."
+    ],
+    "donts": [
+      "Don't invent customer counts, prices, operational statistics or release approval.",
+      "Don't treat legacy gradients, eyebrow styles or conflicting radius variables as new defaults.",
+      "Don't claim Android visual approval or self-hosted native Vazirmatn from web font declarations.",
+      "Don't replace or alter the approved original logo files to conceal their decoding defect."
+    ]
+  }
+}

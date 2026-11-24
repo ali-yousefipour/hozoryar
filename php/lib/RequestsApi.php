@@ -97,6 +97,11 @@ final class RequestsApi {
             try {
                 // Serializes overlapping reservations and approvals within this company.
                 Db::one('SELECT id FROM companies WHERE id=? FOR UPDATE',[$cid]);
+                // Archive and request creation share the company lock: no late request can change a closed period.
+                foreach(Db::all('SELECT snapshot_json FROM work_month_archives WHERE company_id=?',[$cid]) as $archive){
+                    $snapshot=json_decode($archive['snapshot_json'],true,512,JSON_THROW_ON_ERROR);
+                    if($from<=$snapshot['to']&&$to>=$snapshot['from'])self::reject($pdo,409,'ثبت درخواست در دوره بایگانی‌شده مجاز نیست');
+                }
                 $requester=Db::one('SELECT z.requires_substitute FROM users u LEFT JOIN zones z ON z.id=u.zone_id AND z.company_id=u.company_id WHERE u.id=? AND u.company_id=?',[$uid,$cid]);
                 $replacing=Db::one('SELECT id FROM substitute_assignments WHERE company_id=? AND substitute_user_id=? AND from_date<=? AND to_date>=? LIMIT 1',[$cid,$uid,$to,$from]);
                 if($eligible&&!empty($requester['requires_substitute'])&&$sub===null&&!$replacing)self::reject($pdo,400,'برای این منطقه جانشین الزامی است');

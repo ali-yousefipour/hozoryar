@@ -1,0 +1,98 @@
+name: Validate and deploy Hozoryar
+
+on:
+  push:
+    branches: [main, codex/hozoryar-product-redesign]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: Upload the validated main commit to public_html
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hozoryar-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: hozoryar-ci-only-password
+          MARIADB_DATABASE: hozoryar_test_ci
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    env:
+      HOZORYAR_CONFIG: ${{ runner.temp }}/hozoryar-ci.php
+      HOZORYAR_PHP_TEST_CONFIG: ${{ runner.temp }}/hozoryar-ci.php
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, mbstring, intl, curl, zip
+          coverage: none
+      - name: Prepare isolated test database configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -r 'file_put_contents(getenv("HOZORYAR_CONFIG"), "<?php return " . var_export(["db_host"=>"127.0.0.1","db_port"=>"3306","db_name"=>"hozoryar_test_ci","db_user"=>"root","db_pass"=>"hozoryar-ci-only-password"], true) . ";\n");'
+          php php/cli/migrate.php
+          php php/cli/migrate.php
+          php php/cli/check-environment.php
+      - name: Validate source and real PHP MySQL journeys
+        shell: bash
+        run: |
+          set -euo pipefail
+          find php tests -name '*.php' -print0 | xargs -0 -n1 php -l
+          for file in web/*.js server/*.js mobile/*.mjs; do node --check "$file"; done
+          npm test
+          python -m unittest discover -s tests -p 'test_deploy_ftp.py' -v
+      - name: Package shared hosting release
+        run: php php/cli/package-shared-host.php
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hozoryar-shared-host-${{ github.sha }}
+          path: data/hozoryar-shared-host.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (github.event_name == 'push' || inputs.upload)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: hozoryar-production-ftp
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: hozoryar-shared-host-${{ github.sha }}
+          path: data
+      - name: Upload verified release and switch public entry point
+        env:
+          FTP_USER: ${{ secrets.ftp }}
+          FTP_PASS: ${{ secrets.pass }}
+        run: python scripts/deploy_ftp.py data/hozoryar-shared-host.zip

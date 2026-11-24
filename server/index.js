@@ -174,6 +174,16 @@ async function api(req,res,url) {
   const expired=company.subscription_end!==null&&company.subscription_end<tehranDate(new Date());
   if (path==='/api/me' && method==='GET') return json(res,200,{user,features:features(user.company_id),subscription:{...company,expired}});
   if(method!=='GET'&&expired)throw fail(402,'اشتراک شرکت پایان یافته است؛ اطلاعات قابل مشاهده هستند اما عملیات جدید غیرفعال شده است');
+  if (path==='/api/setup' && method==='GET') {
+    admin(user);const cid=user.company_id;
+    const queries={workplaces:'SELECT COUNT(*) n FROM zones WHERE company_id=?',shifts:'SELECT COUNT(*) n FROM shifts WHERE company_id=?',personnel:"SELECT COUNT(*) n FROM users WHERE company_id=? AND active=1 AND role<>'owner'",assigned:'SELECT COUNT(*) n FROM assignments a JOIN users u ON u.company_id=a.company_id AND u.id=a.user_id WHERE a.company_id=? AND u.active=1',attendance:'SELECT COUNT(*) n FROM attendance WHERE company_id=?',pending:"SELECT COUNT(*) n FROM personnel_requests WHERE company_id=? AND status='pending'",incomplete:'SELECT COUNT(*) n FROM attendance WHERE company_id=? AND checked_out_at IS NULL AND checked_in_at<?'};
+    const midnight=new Date(tehranDate(new Date())+'T00:00:00+03:30').toISOString();
+    const counts=Object.fromEntries(Object.entries(queries).map(([key,sql])=>[key,db.prepare(sql).get(...(key==='incomplete'?[cid,midnight]:[cid])).n]));
+    counts.assigned=db.prepare("SELECT COUNT(*) n FROM assignments a JOIN users u ON u.company_id=a.company_id AND u.id=a.user_id WHERE a.company_id=? AND u.active=1 AND u.role<>'owner'").get(cid).n;
+    const steps=Object.fromEntries(['workplaces','shifts','personnel','assigned','attendance'].map(key=>[key,counts[key]>0]));
+    steps.assigned=counts.personnel>0&&counts.assigned===counts.personnel;
+    return json(res,200,{counts,steps,completed:Object.values(steps).filter(Boolean).length,total:5});
+  }
   if (path==='/api/dashboard' && method==='GET') {
     admin(user);
     const cid=user.company_id;
@@ -262,6 +272,11 @@ async function api(req,res,url) {
     const result=db.prepare('INSERT INTO shifts(company_id,name,start_time,end_time,duty_minutes,daily_ot_cap,schedule_kind,schedule_json) VALUES(?,?,?,?,?,?,?,?)').run(user.company_id,b.name,b.start_time,b.end_time,b.duty_minutes,cap,kind,JSON.stringify(config));
     audit(user,'shift.create','shift',Number(result.lastInsertRowid));return json(res,201,{id:Number(result.lastInsertRowid)});
   }
+  if (path==='/api/assignments' && method==='GET') {
+    admin(user);
+    if(!features(user.company_id).shifts)throw fail(403,'شیفت‌ها برای این شرکت فعال نیست');
+    return json(res,200,{items:db.prepare('SELECT a.user_id,a.shift_id,u.name,s.name shift_name FROM assignments a JOIN users u ON u.company_id=a.company_id AND u.id=a.user_id JOIN shifts s ON s.company_id=a.company_id AND s.id=a.shift_id WHERE a.company_id=? AND u.active=1 ORDER BY u.name').all(user.company_id)});
+  }
   if (path==='/api/assignments' && method==='POST') {
     admin(user);const b=await body(req);
     if(!Number.isInteger(b.user_id)||!Number.isInteger(b.shift_id)||!ownUser(user,b.user_id)||!db.prepare('SELECT id FROM shifts WHERE id=? AND company_id=?').get(b.shift_id,user.company_id)) throw fail(404,'کارمند یا شیفت در این شرکت وجود ندارد');
@@ -302,6 +317,10 @@ async function api(req,res,url) {
     if(subId!==null&&(!eligible||!Number.isInteger(subId)||subId===user.id))throw fail(400,'جانشین فقط برای مرخصی استحقاقی روزانه مجاز است');
     db.exec('BEGIN IMMEDIATE');let result;
     try{
+      for(const row of db.prepare('SELECT snapshot_json FROM work_month_archives WHERE company_id=?').all(user.company_id)){
+        const snapshot=JSON.parse(row.snapshot_json);
+        if(b.work_date<=snapshot.to&&end>=snapshot.from)throw fail(409,'ثبت درخواست در دوره بایگانی‌شده مجاز نیست');
+      }
       const requester=db.prepare(`SELECT z.requires_substitute FROM users u LEFT JOIN zones z ON z.id=u.zone_id AND z.company_id=u.company_id
         WHERE u.id=? AND u.company_id=?`).get(user.id,user.company_id);
       const substituteSelf=db.prepare(`SELECT 1 FROM substitute_assignments WHERE company_id=? AND substitute_user_id=? AND from_date<=? AND to_date>=? LIMIT 1`)
@@ -652,13 +671,15 @@ async function api(req,res,url) {
 
 async function staticFile(req,res,url) {
   if(req.method!=='GET') throw fail(405,'روش نامعتبر است');
-  const path=url.pathname==='/brand-logo.png'?logo:resolve(root,'.'+decodeURIComponent(url.pathname==='/'?'/index.html':url.pathname));
+  const path=url.pathname==='/brand-logo.png'?logo:resolve(root,'.'+decodeURIComponent(url.pathname==='/'?'/home.html':url.pathname==='/login'?'/index.html':url.pathname));
   if(path!==logo && path!==root && !path.startsWith(root+sep)) throw fail(403,'مسیر نامعتبر است');
-  const types={'.html':'text/html; charset=utf-8','.js':'application/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.json':'application/json; charset=utf-8'};
+  const types={'.html':'text/html; charset=utf-8','.js':'application/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.ttf':'font/ttf','.json':'application/json; charset=utf-8'};
   try {const bytes=await readFile(path);res.writeHead(200,{'content-type':types[extname(path)]||'application/octet-stream','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; style-src 'self' https://unpkg.com; script-src 'self' https://unpkg.com; img-src 'self' data: https://*.tile.openstreetmap.org https://*.openstreetmap.org; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(bytes);}
   catch {throw fail(404,'فایل یافت نشد');}
 }
 
+// Explicit lifecycle hook for offline tools/tests after every HTTP connection is closed.
+export function closeDatabase() { db.close(); }
 export function createServer() {return http.createServer(async(req,res)=>{
   try {const url=new URL(req.url,'http://localhost');if(url.pathname.startsWith('/api/')) await api(req,res,url);else await staticFile(req,res,url);}
   catch(err){if(!res.headersSent)json(res,err.status||500,{error:err.status?err.message:'خطای داخلی سرور'});else res.destroy();}

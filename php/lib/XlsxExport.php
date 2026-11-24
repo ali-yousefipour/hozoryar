@@ -13,7 +13,7 @@ final class XlsxExport {
         ['internet_off_minutes','اینترنت خاموش (نظارتی)']
     ];
     private static function xml($s): string {
-        return htmlspecialchars((string)$s,ENT_QUOTES|ENT_XML1,'UTF-8');
+        return htmlspecialchars((string)$s,ENT_QUOTES|ENT_XML1|ENT_SUBSTITUTE|ENT_DISALLOWED,'UTF-8');
     }
     private static function column(int $index): string {
         $s='';$index++;
@@ -23,19 +23,25 @@ final class XlsxExport {
     private static function cell($value,int $column,int $row,int $style=0): string {
         $reference=self::column($column).$row;
         if(is_numeric($value)&&!is_string($value))return '<c r="'.$reference.'" s="'.$style.'"><v>'.(string)$value.'</v></c>';
-        return '<c r="'.$reference.'" t="inlineStr" s="'.$style.'"><is><t>'.self::xml($value).'</t></is></c>';
+        return '<c r="'.$reference.'" t="inlineStr" s="'.$style.'"><is><t xml:space="preserve">'.self::xml($value).'</t></is></c>';
     }
     public static function bytes(array $snapshot): string {
-        if(!class_exists('ZipArchive'))throw new RuntimeException('PHP zip extension is required');
         $rows=[['گزارش بایگانی کارکرد '.$snapshot['month'].' — غیرقطعی و غیرمالی'],
             array_merge(['نام کارمند','سمت'],array_column(self::FIELDS,1))];
         foreach($snapshot['reports'] as $person){$totals=$person['report']['totals'];$values=[$person['name'],$person['role']];
             foreach(self::FIELDS as [$key])$values[]=((int)($totals[$key]??0))/1440;
             $rows[]=$values;
         }
+        return self::workbook($rows, true);
+    }
+    public static function report(string $title,array $headers,array $rows): string {
+        return self::workbook([[$title],$headers,...$rows], false);
+    }
+    private static function workbook(array $rows,bool $archive): string {
+        if(!class_exists('ZipArchive'))throw new RuntimeException('PHP zip extension is required');
         $sheetRows='';
         foreach($rows as $i=>$cells){$index=$i+1;$xml='';
-            foreach($cells as $j=>$value)$xml.=self::cell($value,$j,$index,$i===1?1:($i>1&&$j>=2?2:0));
+            foreach($cells as $j=>$value)$xml.=self::cell($value,$j,$index,$i===1?1:($archive&&$i>1&&$j>=2?2:0));
             $sheetRows.='<row r="'.$index.'"'.($i===0?' ht="34" customHeight="1"':'').'>'.$xml.'</row>';
         }
         $sheet='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'.

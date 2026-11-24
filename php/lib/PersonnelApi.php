@@ -3,6 +3,20 @@ declare(strict_types=1);
 require_once __DIR__ . '/Db.php';
 
 final class PersonnelApi {
+    private static function wifiBssids($values): ?string {
+        if(!is_array($values)||!array_is_list($values)||count($values)>20)
+            respond(400,['error'=>'حداکثر ۲۰ شناسه وای‌فای را به صورت فهرست وارد کنید']);
+        $bssids=[];
+        foreach($values as $value){
+            if(!is_string($value)||!preg_match('/\A(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\z/i',trim($value)))
+                respond(400,['error'=>'شناسه وای‌فای باید به شکل 00:11:22:33:44:55 باشد']);
+            $normalized=strtolower(trim($value));
+            if(in_array($normalized,['00:00:00:00:00:00','02:00:00:00:00:00','ff:ff:ff:ff:ff:ff'],true))
+                respond(400,['error'=>'شناسه وای‌فای نامعتبر است']);
+            $bssids[$normalized]=$normalized;
+        }
+        return $bssids?json_encode(array_values($bssids),JSON_THROW_ON_ERROR):null;
+    }
     private static function admin(array $user): void {
         if ($user['role'] === 'employee') respond(403, ['error'=>'دسترسی مدیریتی لازم است']);
     }
@@ -44,16 +58,80 @@ final class PersonnelApi {
                 $pdo->commit();respond(201,['id'=>$id]);
             } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack();throw $e; }
         }
+        if(preg_match('#^/api/users/(\d+)$#',$path,$m)&&$method==='PATCH'){
+            self::owner($user);$b=jsonBody();$target=(int)$m[1];
+            if(!is_string($b['name']??null)||trim($b['name'])===''||mb_strlen($b['name'])>120||
+                !is_string($b['username']??null)||!preg_match('/^[a-zA-Z0-9_.-]{3,60}$/',$b['username'])||
+                !is_bool($b['active']??null)||!in_array($b['role']??null,['owner','manager','employee'],true))
+                respond(400,['error'=>'اطلاعات پرسنل نامعتبر است']);
+            $pdo=Db::pdo();$pdo->beginTransaction();
+            try{
+                $company=Db::one('SELECT max_personnel FROM companies WHERE id=? FOR UPDATE',[$cid]);
+                $current=Db::one('SELECT id,role,active FROM users WHERE company_id=? AND id=? FOR UPDATE',[$cid,$target]);
+                if(!$current){$pdo->rollBack();respond(404,['error'=>'پرسنل یافت نشد']);}
+                if(($current['role']==='owner'&&($b['role']!=='owner'||!$b['active']))||($current['role']!=='owner'&&$b['role']==='owner')){
+                    $pdo->rollBack();respond(403,['error'=>'تغییر مالک شرکت از این مسیر مجاز نیست']);
+                }
+                if(Db::one('SELECT id FROM users WHERE company_id=? AND username=? AND id<>?',[$cid,$b['username'],$target])){
+                    $pdo->rollBack();respond(409,['error'=>'نام کاربری در شرکت تکراری است']);
+                }
+                if(!$current['active']&&$b['active']&&$company['max_personnel']!==null){
+                    $count=(int)Db::one('SELECT COUNT(*) n FROM users WHERE company_id=? AND active=1',[$cid])['n'];
+                    if($count>=(int)$company['max_personnel']){$pdo->rollBack();respond(409,['error'=>'ظرفیت پرسنل شرکت تکمیل است']);}
+                }
+                if(!$b['active']&&Db::one('SELECT id FROM attendance WHERE company_id=? AND user_id=? AND checked_out_at IS NULL',[$cid,$target])){
+                    $pdo->rollBack();respond(409,['error'=>'ابتدا حضور باز این کارمند را تعیین تکلیف کنید']);
+                }
+                Db::run('UPDATE users SET name=?,username=?,role=?,active=? WHERE company_id=? AND id=?',[trim($b['name']),$b['username'],$b['role'],(int)$b['active'],$cid,$target]);
+                if(!$b['active']||$current['role']!==$b['role'])Db::run('DELETE FROM sessions WHERE company_id=? AND user_id=?',[$cid,$target]);
+                self::audit($user,'user.update','user',$target);$pdo->commit();respond(200,['ok'=>true]);
+            }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
+        }
         if ($path==='/api/zones'&&$method==='GET') {
-            self::admin($user);respond(200,['items'=>Db::all('SELECT id,name,requires_substitute FROM zones WHERE company_id=? ORDER BY name',[$cid])]);
+            self::admin($user);
+            $items=Db::all('SELECT id,name,city,address,requires_substitute,geofence_lat,geofence_lng,geofence_radius_m,wifi_bssids FROM zones WHERE company_id=? ORDER BY name',[$cid]);
+            foreach($items as &$item)$item['wifi_bssids']=json_decode($item['wifi_bssids']??'[]',true,512,JSON_THROW_ON_ERROR);
+            unset($item);
+            respond(200,['items'=>$items]);
         }
         if ($path==='/api/zones'&&$method==='POST') {
             self::owner($user);$b=jsonBody();
             if (!is_string($b['name']??null)||trim($b['name'])===''||mb_strlen($b['name'])>100||!is_bool($b['requires_substitute']??null))
                 respond(400,['error'=>'اطلاعات منطقه نامعتبر است']);
             if (Db::one('SELECT id FROM zones WHERE company_id=? AND name=?',[$cid,trim($b['name'])])) respond(409,['error'=>'منطقه تکراری است']);
-            Db::run('INSERT INTO zones(company_id,name,requires_substitute) VALUES(?,?,?)',[$cid,trim($b['name']),(int)$b['requires_substitute']]);
+            $city=$b['city']??'';$address=$b['address']??'';
+            $lat=$b['lat']??null;$lng=$b['lng']??null;$radius=$b['radius_m']??200;
+            if(!is_string($city)||mb_strlen($city)>100||!is_string($address)||mb_strlen($address)>500||
+                (($lat===null)!==($lng===null))||($lat!==null&&(!(is_int($lat)||is_float($lat))||!(is_int($lng)||is_float($lng))||abs($lat)>90||abs($lng)>180))||
+                !is_int($radius)||$radius<50||$radius>50000)respond(400,['error'=>'نشانی یا محدوده محل کار نامعتبر است']);
+            $wifi=self::wifiBssids($b['wifi_bssids']??[]);
+            Db::run('INSERT INTO zones(company_id,name,requires_substitute,city,address,geofence_lat,geofence_lng,geofence_radius_m,wifi_bssids) VALUES(?,?,?,?,?,?,?,?,?)',
+                [$cid,trim($b['name']),(int)$b['requires_substitute'],trim($city),trim($address),$lat,$lng,$radius,$wifi]);
             $id=(int)Db::pdo()->lastInsertId();self::audit($user,'zone.create','zone',$id);respond(201,['id'=>$id]);
+        }
+        if(preg_match('#^/api/zones/(\d+)/wifi$#',$path,$m)&&$method==='PATCH'){
+            self::owner($user);
+            $id=(int)$m[1];
+            $wifi=self::wifiBssids(jsonBody()['wifi_bssids']??null);
+            if(!Db::one('SELECT id FROM zones WHERE company_id=? AND id=?',[$cid,$id]))respond(404,['error'=>'محل کار یافت نشد']);
+            Db::run('UPDATE zones SET wifi_bssids=? WHERE company_id=? AND id=?',[$wifi,$cid,$id]);
+            self::audit($user,'zone.wifi','zone',$id);
+            respond(200,['ok'=>true]);
+        }
+        if(preg_match('#^/api/zones/(\d+)/geofence$#',$path,$m)&&$method==='PATCH'){
+            self::owner($user);$b=jsonBody();$id=(int)$m[1];
+            $lat=$b['lat']??null;$lng=$b['lng']??null;$radius=$b['radius_m']??null;
+            $number=static fn($v)=>is_int($v)||is_float($v);
+            if(!array_key_exists('lat',$b)||!array_key_exists('lng',$b)||
+                (($lat===null)!==($lng===null))||($lat!==null&&(!$number($lat)||!$number($lng)||!is_finite((float)$lat)||!is_finite((float)$lng)||abs($lat)>90||abs($lng)>180))||
+                !is_int($radius)||$radius<50||$radius>50000)respond(400,['error'=>'مختصات یا شعاع محل کار نامعتبر است']);
+            if(!Db::one('SELECT id FROM zones WHERE company_id=? AND id=?',[$cid,$id]))respond(404,['error'=>'محل کار یافت نشد']);
+            $pdo=Db::pdo();$pdo->beginTransaction();
+            try{
+                Db::one('SELECT id FROM companies WHERE id=? FOR UPDATE',[$cid]);
+                Db::run('UPDATE zones SET geofence_lat=?,geofence_lng=?,geofence_radius_m=? WHERE company_id=? AND id=?',[$lat,$lng,$radius,$cid,$id]);
+                self::audit($user,'zone.geofence','zone',$id);$pdo->commit();respond(200,['ok'=>true]);
+            }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
         }
         if (preg_match('#^/api/zones/(\d+)$#',$path,$m)&&$method==='PATCH') {
             self::owner($user);$b=jsonBody();if(!is_bool($b['requires_substitute']??null))respond(400,['error'=>'سیاست منطقه نامعتبر است']);

@@ -2,15 +2,17 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
+import {apiBase} from './api-config.mjs';
 
 const TASK='hozoryar-opt-in-background-location';
 const base=String(Constants.expoConfig?.extra?.apiBaseUrl||'').replace(/\/$/,'');
 TaskManager.defineTask(TASK,async({data,error})=>{
-  if(error||!data?.locations?.length||!base.startsWith('https://')||base.includes('example'))return;
+  if(error||!data?.locations?.length)return;
+  let endpoint;try{endpoint=apiBase(base,__DEV__);}catch{return;}
   const token=await SecureStore.getItemAsync('hozoryar_token');if(!token)return;
   const p=data.locations[data.locations.length-1];
   try {
-    const res=await fetch(base+'/api/location',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy})});
+    const res=await fetch(endpoint+'/api/location',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy})});
     // After checkout or expired session, background updates no longer have authority to send.
     if([401,403].includes(res.status))await stopTracking();
   } catch { /* transient network failure: never pretend location was delivered */ }

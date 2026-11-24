@@ -5,7 +5,7 @@
     "scheme": "hozoryar",
     "version": "0.3.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "icon": "./assets/logo.png",
     "splash": { "image": "./assets/logo.png", "resizeMode": "contain", "backgroundColor": "#4C1D95" },
     "android": {

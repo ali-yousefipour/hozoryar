@@ -1,3 +1,4 @@
+import {adminViews,adminTitles} from './admin.js?v=20261103-1';
 const $=s=>document.querySelector(s), state={token:sessionStorage.getItem('hz_token'),platform:sessionStorage.getItem('hz_platform')==='1',user:null,features:{},view:'dashboard'};
 const navPaths={
   dashboard:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
@@ -14,64 +15,109 @@ const navPaths={
 document.querySelectorAll('#nav button[data-view]').forEach(button=>{
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
   svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.8');svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');svg.setAttribute('aria-hidden','true');
-  const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',navPaths[button.dataset.view]);svg.append(path);
+  const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',navPaths[button.dataset.view]||navPaths.report);svg.append(path);
   button.firstChild.textContent='';button.prepend(svg);
 });
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fa=n=>new Intl.NumberFormat('fa-IR').format(n||0);
-const date=s=>s?new Intl.DateTimeFormat('fa-IR',{dateStyle:'medium',timeStyle:'short',calendar:'persian'}).format(new Date(s)):'—';
+const date=s=>s?new Intl.DateTimeFormat('fa-IR',{dateStyle:'medium',timeStyle:'short',calendar:'persian',timeZone:'Asia/Tehran'}).format(new Date(typeof s==='string'&&/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)?s.replace(' ','T')+'+03:30':s)):'—';
 function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.remove('visible'),4000);}
 async function request(path,method='GET',data) {
   const res=await fetch(path,{method,headers:{...(state.token?{Authorization:'Bearer '+state.token}:{}),...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined});
   const json=await res.json().catch(()=>({error:'پاسخ نامعتبر سرور'}));
+  if(res.status===401&&state.user){loginScreen();throw new Error('نشست شما پایان یافته است. دوباره وارد شوید.');}
   if(!res.ok)throw new Error(json.error||'خطای ارتباط با سامانه');return json;
 }
 function card(content){return `<div class="card">${content}</div>`;}
 function setContent(html){$('#content').innerHTML=html;}
 function formData(form){return Object.fromEntries(new FormData(form));}
-function guard(fn){return async e=>{e?.preventDefault();try{await fn(e);}catch(err){toast(err.message);}};}
+function guard(fn){return async e=>{e?.preventDefault();const button=e?.target?.querySelector?.('button[type="submit"],button.primary');if(button?.disabled)return;if(button){button.disabled=true;button.setAttribute('aria-busy','true');}try{await fn(e);}catch(err){toast(err.message);}finally{if(button){button.disabled=false;button.removeAttribute('aria-busy');}}};}
 function form(label,fields,action){return `<form id="${action}" class="card stack"><h3>${label}</h3><div class="form-grid">${fields}</div><button class="primary">ثبت اطلاعات</button></form>`;}
 function field(label,name,type='text',extra=''){return `<label>${label}<input name="${name}" type="${type}" ${extra} required></label>`;}
 
-function loginScreen(){state.token=null;state.user=null;state.platform=false;sessionStorage.removeItem('hz_token');sessionStorage.removeItem('hz_platform');$('#login').classList.remove('hidden');$('#app').classList.add('hidden');}
-async function authenticate(){const response=await request(state.platform?'/api/platform/me':'/api/me');state.user=response.user;state.features=response.features||{};state.subscription=response.subscription||null;$('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#company-title').textContent=state.platform?'مدیریت مرکزی':state.user.company_name;$('#user-title').textContent=state.user.name;$('#top-user-name').textContent=state.user.name;
+const admin=adminViews({$,state,request,esc,fa,date,minutes:(n)=>minutes(n),card,setContent,formData,guard,toast,navigate,icon,zoneManagement});
+function loginScreen(){state.token=null;state.user=null;state.platform=false;sessionStorage.removeItem('hz_token');sessionStorage.removeItem('hz_platform');$('#login').classList.remove('hidden');$('#login-appearance').classList.remove('hidden');$('#app').classList.add('hidden');}
+async function authenticate(){const response=await request(state.platform?'/api/platform/me':'/api/me');state.user=response.user;state.features=response.features||{};state.subscription=response.subscription||null;$('#login').classList.add('hidden');$('#login-appearance').classList.add('hidden');$('#app').classList.remove('hidden');$('#company-title').textContent=state.platform?'مدیریت مرکزی':state.user.company_name;$('#user-title').textContent=state.user.name;$('#top-user-name').textContent=state.user.name;
+  document.querySelectorAll('[data-company-menu]').forEach(el=>el.classList.toggle('hidden',state.platform));
   if(state.platform){document.querySelectorAll('#nav button[data-view]').forEach(el=>el.classList.toggle('hidden',el.dataset.view!=='platform'));await navigate('platform');return;}
   document.querySelector('[data-view="platform"]').classList.add('hidden');
   document.querySelectorAll('[data-admin]').forEach(el=>el.classList.toggle('hidden',state.user.role==='employee'));
   document.querySelectorAll('[data-owner]').forEach(el=>el.classList.toggle('hidden',state.user.role!=='owner'));
   document.querySelector('[data-view="map"]').classList.toggle('hidden',!state.features.liveMap||state.user.role==='employee');
-  document.querySelector('[data-view="monitor"]').classList.toggle('hidden',!state.features.monitoring||state.user.role==='employee');
-  await navigate(state.user.role==='employee'?'attendance':'dashboard');
+  document.querySelector('[data-view="monitor"]').classList.toggle('hidden',!state.features.monitoring||state.user.role==='employee');document.querySelector('[data-view="tracking"]').classList.toggle('hidden',!state.features.monitoring||state.user.role==='employee');
+  const initial=location.hash.slice(1);const target=initial==='attendance'?'traffic':initial;const button=document.querySelector(`#nav button[data-view="${CSS.escape(target)}"]`);
+  await navigate(state.user.role==='employee'?'mobile':target==='workplace-new'&&state.user.role==='owner'?target:button&&!button.classList.contains('hidden')?target:'dashboard');
 }
 
+function closeMenu(){ $('#app').classList.remove('menu-open'); $('#menu-toggle').setAttribute('aria-expanded','false'); }
+$('#menu-toggle').onclick=()=>{const open=$('#app').classList.toggle('menu-open');$('#menu-toggle').setAttribute('aria-expanded',String(open));};
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('#app').classList.contains('menu-open')){closeMenu();$('#menu-toggle').focus();}});
 async function navigate(view){
+  if(!state.platform&&state.user?.role==='employee')view='mobile';
+  if(view==='workplace-new'&&(state.platform||state.user?.role!=='owner'))view='dashboard';
+  if(view==='attendance')view='traffic';
+  if(view==='monitor')view='tracking';
+  closeMenu();
   state.view=view;if(location.hash!=='#'+view)history.replaceState(null,'','#'+view);
   document.querySelectorAll('#nav button').forEach(b=>{const active=b.dataset.view===view;b.classList.toggle('active',active);if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
-  const titles={dashboard:'داشبورد مدیریتی',attendance:'ثبت حضور من',requests:'مرخصی و مأموریت',report:'گزارش کارکرد',people:'مدیریت پرسنل',shifts:'شیفت‌های کاری',map:'نقشه زنده نیروها',monitor:'نظارت بر پرسنل',settings:'تنظیمات شرکت',platform:'مدیریت اشتراک شرکت‌ها'};
-  $('#page-title').textContent=titles[view]||view;setContent('<div class="card">در حال بارگذاری...</div>');
-  try{if(view==='dashboard')await dashboard();if(view==='attendance')await attendance();if(view==='requests')await requests();if(view==='report')await workReport();if(view==='people')await people();if(view==='shifts')await shifts();if(view==='map')await liveMap();if(view==='monitor')await monitor();if(view==='settings')await settings();if(view==='platform'&&state.platform)await platformCompanies();}
-  catch(e){setContent(card(`<p class="error">${esc(e.message)}</p>`));}
+  const titles={...adminTitles,'workplace-new':'ثبت محل کار جدید',dashboard:'داشبورد مدیریتی',requests:'مرخصی و مأموریت',report:'گزارش کارکرد',people:'مدیریت پرسنل',shifts:'شیفت‌های کاری',map:'نقشه زنده نیروها',monitor:'نظارت بر پرسنل',settings:'تنظیمات شرکت',platform:'مدیریت اشتراک شرکت‌ها'};
+  $('#page-title').textContent=titles[view]||view;$('#content').setAttribute('aria-busy','true');setContent('<div class="card loading-state" role="status">در حال دریافت اطلاعات…</div>');
+  try{if(view==='workplace-new'){workplaceNew();return;}if(await admin.render(view))return;if(view==='archives'){await workReport();$('#report-form').classList.add('hidden');$('#report-results').classList.add('hidden');return;}if(view==='dashboard')await dashboard();if(view==='requests')await requests();if(view==='report')await workReport();if(view==='people')await people();if(view==='shifts')await shifts();if(view==='map')await liveMap();if(view==='monitor')await monitor();if(view==='settings')await settings();if(view==='platform'&&state.platform)await platformCompanies();}
+  catch(e){setContent(card(`<div role="alert"><h2>اطلاعات دریافت نشد</h2><p class="error">${esc(e.message)}</p><button class="ghost" id="page-retry">تلاش مجدد</button></div>`));$('#page-retry').onclick=()=>navigate(view);}
+  finally{$('#content').setAttribute('aria-busy','false');}
 }
 
-async function dashboard(from='',to=''){const params=new URLSearchParams();if(from)params.set('from',from);if(to)params.set('to',to);const a=await request('/api/dashboard?'+params),s=state.subscription;
-  setContent(`${s?`<div class="note" style="margin-bottom:18px">وضعیت اشتراک: <b>${s.expired?'پایان‌یافته — فقط مشاهده اطلاعات':'فعال'}</b> · پایان اشتراک: ${s.subscription_end?esc(s.subscription_end):'نامحدود'} · سقف حساب‌های فعال: ${s.max_personnel===null?'نامحدود':fa(s.max_personnel)}</div>`:''}<div class="grid">${[['کل کارکنان',a.total],['حاضر در شیفت',a.present],['فاقد حضور فعال',a.absent]].map(([k,v])=>card(`<span class="stat-label">${k}</span><div class="stat-value">${fa(v)}</div>`)).join('')}</div><div class="section-head"><h2>روند ثبت ورود</h2></div><form id="trend-form" class="card form-grid">${field('از تاریخ (میلادی)','from','date')}${field('تا تاریخ (میلادی)','to','date')}<button class="primary">اعمال فیلتر</button></form>${card(`<div class="table-wrap"><table class="table"><thead><tr><th>روز</th><th>تعداد نشست ورود</th><th>کارکنان یکتا</th></tr></thead><tbody>${a.arrivals.map(x=>`<tr><td>${esc(x.day)}</td><td>${fa(x.sessions)}</td><td>${fa(x.employees)}</td></tr>`).join('')||'<tr><td colspan="3">در این بازه ثبت ورودی وجود ندارد.</td></tr>'}</tbody></table></div>`) }<div class="section-head"><h2>نمای کلی سازمان</h2></div>${card('<h3>مدیریت نیروها</h3><p class="muted">اطلاعات آماری و تردد فقط متعلق به شرکت شماست.</p><div class="action-row"><button class="primary" id="go-map">مشاهده نقشه زنده</button><button class="ghost" id="go-people">مدیریت پرسنل</button></div>')}`);
+function icon(view){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${navPaths[view]||navPaths.report}"></path></svg>`;}
+function personnelTable(title,items,present){
+  if(!Array.isArray(items))return '';
+  return card(`<h2>${title} <span class="badge">${fa(items.length)} نفر</span></h2><div class="table-wrap"><table class="table"><thead><tr><th>کد پرسنلی</th><th>نام و نام خانوادگی</th>${present?'<th>محل کار</th><th>زمان ورود</th>':''}</tr></thead><tbody>${items.map(p=>`<tr><td>${fa(p.id)}</td><td>${esc(p.name)}</td>${present?`<td>${esc(p.workplace||"—")}</td><td>${date(p.checked_in_at)}</td>`:''}</tr>`).join('')||`<tr><td colspan="${present?4:2}">در حال حاضر فردی در این فهرست نیست.</td></tr>`}</tbody></table></div>`);
+}
+async function dashboard(from='',to=''){
+  const params=new URLSearchParams();if(from)params.set('from',from);if(to)params.set('to',to);
+  const [a,setup]=await Promise.all([request('/api/dashboard?'+params),request('/api/setup')]),s=state.subscription;
+  const steps=[['workplaces','محل کار','workplaces'],['shifts','تعریف شیفت','shifts'],['personnel','افزودن پرسنل','people'],['assigned','تخصیص شیفت','shifts'],['attendance','اولین تردد در اپ','mobile']];
+  const setupHtml=`<section class="setup-journey" aria-labelledby="setup-title"><div class="section-head"><div><h2 id="setup-title">${setup.completed===setup.total?'فضای کاری شما آماده است':'راه‌اندازی فضای کاری'}</h2><p class="muted">${fa(setup.completed)} مرحله از ${fa(setup.total)} مرحله تکمیل شده است. وضعیت از اطلاعات همین شرکت خوانده می‌شود.</p></div><a class="home-link" href="/#start" target="_blank" rel="noopener">راهنمای شروع</a></div><ol class="setup-steps">${steps.map(([key,label,target],i)=>`<li class="${setup.steps[key]?'is-complete':''}"><button type="button" data-setup-view="${target}" ${key==='workplaces'&&state.user.role!=='owner'?'disabled':''}><span class="step-index">${fa(i+1)}</span><span>${label}<small>${setup.steps[key]?'تکمیل شده':key==='workplaces'&&state.user.role!=='owner'?'با دسترسی مالک':'ادامه این مرحله'}</small></span></button></li>`).join('')}</ol></section>`;
+  const metrics=[['کل پرسنل',a.total,'people'],['حاضرین',a.present,'attendance'],['غایبین',a.unexcused_people?.length??a.absent,'monitor'],['مرخصی',a.leave_people?.length??0,'requests']];
+  setContent(`<section class="card setup-card"><div><h2>فضای کاری ${esc(a.company)}</h2><p class="muted">دسترسی سریع به مدیریت پرسنل، شیفت‌ها و وضعیت تردد</p></div><div class="setup-actions"><button class="ghost" id="go-mobile">نصب اپلیکیشن موبایل</button>${state.user.role==='owner'?'<button class="ghost" id="go-workplace">ثبت محل کار</button>':''}<button class="ghost" id="go-people">${icon('people')} پرسنل</button><button class="ghost" id="go-shifts">${icon('shifts')} شیفت‌ها</button>${state.features.liveMap?`<button class="ghost" id="go-map">${icon('map')} نقشه زنده</button>`:''}</div></section>
+  ${setup.completed<setup.total?setupHtml:''}
+  <div class="dashboard-day"><span>${new Intl.DateTimeFormat('fa-IR',{dateStyle:'full',timeZone:'Asia/Tehran'}).format(new Date())}</span><button class="ghost" id="dashboard-refresh">به‌روزرسانی وضعیت</button></div>
+  <section class="dashboard-stats" aria-label="آمار سازمان">${metrics.map(([label,value,key])=>`<article class="metric"><div class="metric-top"><span>${label}</span>${icon(key)}</div><strong>${fa(value)}<small>نفر</small></strong></article>`).join('')}</section>
+  <div class="dashboard-actions"><button class="ghost" data-setup-view="requests">درخواست‌های در انتظار <b>${fa(setup.counts.pending)}</b></button><button class="ghost" data-setup-view="incomplete">ترددهای ناقص روزهای قبل <b>${fa(setup.counts.incomplete)}</b></button><span class="muted">حاضرین بر اساس تردد بدون خروج محاسبه می‌شوند.${setup.counts.incomplete?' ترددهای قدیمی را بررسی کنید.':''}</span></div>
+  <div class="dashboard-lists">${personnelTable('حاضرین',a.present_people,true)}${personnelTable('غایبین',a.unexcused_people??a.absent_people,false)}${personnelTable('مرخصی',a.leave_people,false)}${personnelTable('مأموریت',a.mission_people,false)}</div>
+  <div class="section-head"><h2>روند ثبت ورود</h2><span class="badge">${esc(a.period.from)} تا ${esc(a.period.to)}</span></div>
+  <form id="trend-form" class="card form-grid">${field('از تاریخ (میلادی)','from','date')}${field('تا تاریخ (میلادی)','to','date')}<button class="primary">اعمال فیلتر</button></form>
+  ${card(`<div class="table-wrap"><table class="table"><thead><tr><th>روز</th><th>تعداد نشست ورود</th><th>کارکنان یکتا</th></tr></thead><tbody>${a.arrivals.map(x=>`<tr><td>${esc(x.day)}</td><td>${fa(x.sessions)}</td><td>${fa(x.employees)}</td></tr>`).join('')||'<tr><td colspan="3">در این بازه ثبت ورودی وجود ندارد.</td></tr>'}</tbody></table></div>`)}
+  ${s?`<div class="subscription-strip"><span class="badge ${s.expired?'':'ok'}">اشتراک ${s.expired?'پایان‌یافته':'فعال'}</span><span>پایان: ${s.subscription_end?esc(s.subscription_end):'نامحدود'}</span><span>سقف پرسنل: ${s.max_personnel===null?'نامحدود':fa(s.max_personnel)}</span></div>`:''}`);
   $('#trend-form [name=from]').value=a.period.from;$('#trend-form [name=to]').value=a.period.to;
   $('#trend-form').onsubmit=guard(async e=>{const b=formData(e.target);await dashboard(b.from,b.to);});
-  $('#go-map').onclick=()=>navigate('map');$('#go-people').onclick=()=>navigate('people');}
-
-async function coords(){if(!navigator.geolocation)throw new Error('موقعیت‌یابی در این دستگاه پشتیبانی نمی‌شود');return await new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(p=>resolve({lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy}),()=>reject(new Error('اجازه موقعیت مکانی صادر نشد یا GPS در دسترس نیست')),{enableHighAccuracy:true,timeout:16000,maximumAge:0}));}
-async function attendance(){const r=await request('/api/attendance');const open=r.items.find(s=>!s.checked_out_at);setContent(`<div class="grid">${card(`<span class="stat-label">وضعیت جاری</span><div class="stat-value" style="font-size:25px">${open?'حاضر در شیفت':'فاقد حضور فعال'}</div><span class="badge ${open?'ok':''}">${open?'ورود ثبت شده':'آماده ثبت ورود'}</span>`)}${card(`<span class="stat-label">آخرین ورود</span><h3>${date(r.items[0]?.checked_in_at)}</h3>`)}${card(`<span class="stat-label">تعداد ترددها</span><div class="stat-value">${fa(r.items.length)}</div>`)}</div><div class="section-head"><h2>ثبت تردد</h2></div>${card(`<p>برای ثبت ورود، موقعیت مکانی شما بررسی می‌شود. ثبت خروج فقط با اقدام صریح خودتان انجام می‌شود.</p><div class="action-row"><button id="punch" class="primary">${open?'ثبت خروج':'ثبت ورود با GPS'}</button>${open&&state.features.monitoring?'<button id="send-location" class="ghost">ارسال موقعیت به نقشه زنده</button>':''}<button id="refresh" class="ghost">به‌روزرسانی</button></div>`)}<div class="section-head"><h2>سوابق اخیر</h2></div>${card(`<div class="table-wrap"><table class="table"><thead><tr><th>ورود</th><th>خروج</th><th>مدت حضور</th></tr></thead><tbody>${r.items.map(s=>`<tr><td>${date(s.checked_in_at)}</td><td>${date(s.checked_out_at)}</td><td>${s.checked_out_at?fa(Math.round((new Date(s.checked_out_at)-new Date(s.checked_in_at))/60000))+' دقیقه':'فعال'}</td></tr>`).join('')||'<tr><td colspan="3">هنوز ترددی ثبت نشده است.</td></tr>'}</tbody></table></div>`)}`);
-  $('#refresh').onclick=()=>navigate('attendance');$('#punch').onclick=guard(async()=>{const btn=$('#punch');btn.disabled=true;try{const loc=open?{}:await coords();await request('/api/attendance','POST',{action:open?'out':'in',...loc});toast('تردد با موفقیت ثبت شد');await navigate('attendance');}finally{btn.disabled=false;}});
-  if($('#send-location'))$('#send-location').onclick=guard(async()=>{const loc=await coords();await request('/api/location','POST',loc);toast('موقعیت شما به نقشه زنده ارسال شد');});
+  document.querySelectorAll('[data-setup-view]').forEach(button=>button.onclick=()=>navigate(button.dataset.setupView));
+  $('#dashboard-refresh').onclick=guard(async()=>{await dashboard(from,to);toast('وضعیت به‌روز شد');});
+  $('#go-mobile').onclick=()=>navigate('mobile');
+  if($('#go-workplace'))$('#go-workplace').onclick=()=>navigate('workplace-new');
+  if($('#go-map'))$('#go-map').onclick=()=>navigate('map');
+  $('#go-people').onclick=()=>navigate('people');$('#go-shifts').onclick=()=>navigate('shifts');
 }
 
-async function people(){const r=await request('/api/users');setContent(`<div class="section-head"><h2>کارکنان شرکت</h2><span class="badge">${fa(r.items.length)} نفر</span></div>${card(`<div class="table-wrap"><table class="table"><thead><tr><th>نام</th><th>نام کاربری</th><th>نقش</th><th>وضعیت</th></tr></thead><tbody>${r.items.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${u.role==='owner'?'مدیر شرکت':u.role==='manager'?'مدیر':'کارمند'}</td><td><span class="badge ${u.active?'ok':''}">${u.active?'فعال':'غیرفعال'}</span></td></tr>`).join('')}</tbody></table></div>`)}${state.user.role==='owner'?'<div class="section-head"><h2>افزودن کارمند</h2></div>'+form('حساب کاربری جدید',field('نام و نام خانوادگی','name')+field('نام کاربری','username')+field('رمز عبور حداقل ۱۲ کاراکتر','password','password','minlength="12"')+'<label>سطح دسترسی<select name="role"><option value="employee">کارمند</option><option value="manager">مدیر</option></select></label>','person-form'):''}`);if($('#person-form'))$('#person-form').onsubmit=guard(async e=>{await request('/api/users','POST',formData(e.target));toast('کارمند اضافه شد');navigate('people');});}
+async function people(){
+  const r=await request('/api/users'),owner=state.user.role==='owner';
+  setContent(`<div class="section-head"><h2>کارکنان شرکت</h2><span class="badge">${fa(r.items.length)} نفر</span></div><label class="card">جست‌وجوی پرسنل<input id="people-search" type="search" placeholder="نام یا نام کاربری"></label><div class="card table-wrap"><table class="table"><thead><tr><th>نام</th><th>نام کاربری</th><th>نقش</th><th>وضعیت</th>${owner?'<th>عملیات</th>':''}</tr></thead><tbody id="people-rows"></tbody></table></div><section id="people-editor"></section>${owner?'<div class="section-head"><h2>افزودن کارمند</h2></div>'+form('حساب کاربری جدید',field('نام و نام خانوادگی','name')+field('نام کاربری','username','text','autocomplete="off"')+field('رمز عبور حداقل ۱۲ کاراکتر','password','password','minlength="12" autocomplete="new-password"')+'<label>سطح دسترسی<select name="role"><option value="employee">کارمند</option><option value="manager">مدیر</option></select></label>','person-form'):''}`);
+  function draw(){const query=$('#people-search').value.trim().toLocaleLowerCase('fa');$('#people-rows').innerHTML=r.items.filter(p=>(p.name+' '+p.username).toLocaleLowerCase('fa').includes(query)).map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${u.role==='owner'?'مدیر شرکت':u.role==='manager'?'مدیر':'کارمند'}</td><td><span class="badge ${u.active?'ok':''}">${u.active?'فعال':'غیرفعال'}</span></td>${owner?`<td><button type="button" class="ghost person-edit" data-id="${u.id}">ویرایش</button></td>`:''}</tr>`).join('')||'<tr><td colspan="5">پرسنلی یافت نشد.</td></tr>';
+    document.querySelectorAll('.person-edit').forEach(button=>button.onclick=()=>{const u=r.items.find(p=>String(p.id)===button.dataset.id);$('#people-editor').innerHTML=`<form id="person-edit-form" class="card stack"><h3>ویرایش پرسنل</h3><div class="form-grid"><label>نام و نام خانوادگی<input name="name" required maxlength="120" value="${esc(u.name)}"></label><label>نام کاربری<input name="username" required pattern="[a-zA-Z0-9_.-]{3,60}" value="${esc(u.username)}" autocomplete="off"></label><label>نقش<select name="role" ${u.role==='owner'?'disabled':''}>${(u.role==='owner'?[['owner','مدیر شرکت']]:[['employee','کارمند'],['manager','مدیر']]).map(([key,title])=>`<option value="${key}" ${u.role===key?'selected':''}>${title}</option>`).join('')}</select></label><label>وضعیت<select name="active" ${u.role==='owner'?'disabled':''}><option value="1" ${u.active?'selected':''}>فعال</option><option value="0" ${u.active?'':'selected'}>غیرفعال</option></select></label></div><div class="action-row"><button class="primary">ذخیره تغییرات</button><button type="button" class="ghost" id="person-cancel">انصراف</button></div></form>`;
+      $('#person-cancel').onclick=()=>$('#people-editor').replaceChildren();$('#person-edit-form').onsubmit=guard(async e=>{const f=e.target;await request('/api/users/'+u.id,'PATCH',{name:f.elements.name.value,username:f.elements.username.value,role:f.elements.role.value,active:f.elements.active.value==='1'});toast('اطلاعات پرسنل ذخیره شد');await people();});$('#people-editor').scrollIntoView({block:'nearest'});
+    });
+  }
+  $('#people-search').oninput=draw;draw();
+  if($('#person-form'))$('#person-form').onsubmit=guard(async e=>{await request('/api/users','POST',formData(e.target));toast('کارمند اضافه شد');await people();});
+}
 
 async function shifts(){
-  const [a,b]=await Promise.all([request('/api/shifts'),request('/api/users')]);
+  const [a,b,assigned]=await Promise.all([request('/api/shifts'),request('/api/users'),request('/api/assignments')]);
+  b.items=b.items.filter(u=>u.active);
   const typeNames={fixed:'ثابت',weekly:'هفتگی',rotating:'چرخشی',rotation_segments:'چرخشی قطعه‌ای',floating:'شناور',advanced:'چندبخشی',auto:'خودکار'};
   setContent(`<div class="section-head"><h2>شیفت‌های تعریف‌شده</h2></div>${card(`<div class="table-wrap"><table class="table"><thead><tr><th>نام شیفت</th><th>نوع</th><th>شروع</th><th>پایان</th><th>موظفی</th><th>سقف اضافه‌کار</th></tr></thead><tbody>${a.items.map(s=>`<tr><td>${esc(s.name)}</td><td>${typeNames[s.schedule_kind]||'ثابت'}</td><td>${esc(s.start_time)}</td><td>${esc(s.end_time)}</td><td>${fa(s.duty_minutes)} دقیقه</td><td>${fa(s.daily_ot_cap)} دقیقه</td></tr>`).join('')||'<tr><td colspan="6">شیفتی تعریف نشده است.</td></tr>'}</tbody></table></div>`)}<div class="section-head"><h2>شیفت جدید</h2></div><form id="shift-form" class="card stack"><h3>تعریف شیفت</h3><div class="form-grid">${field('عنوان','name')}${field('ساعت شروع','start_time','time')}${field('ساعت پایان','end_time','time')}${field('موظفی (دقیقه)','duty_minutes','number','min="0" max="1440"')}${field('سقف اضافه‌کار روزانه (دقیقه)','daily_ot_cap','number','min="0" max="1440" value="27"')}<label>نوع شیفت<select name="schedule_kind"><option value="fixed">ثابت</option><option value="weekly">هفتگی</option><option value="rotating">چرخشی</option><option value="floating">شناور</option><option value="advanced">چندبخشی (دو بازه در روز)</option></select></label></div><div id="schedule-fields"></div><button class="primary">ثبت شیفت</button></form><div class="section-head"><h2>تخصیص شیفت</h2></div>${form('انتخاب کارمند و شیفت',`<label>کارمند<select name="user_id">${b.items.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></label><label>شیفت<select name="shift_id">${a.items.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label>`,'assign-form')}`);
   const sf=$('#shift-form');
+  $('#assign-form').insertAdjacentHTML('beforebegin',card(`<h3>شیفت فعلی کارکنان</h3><div class="table-wrap"><table class="table"><thead><tr><th>کارمند</th><th>شیفت فعلی</th></tr></thead><tbody>${b.items.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(assigned.items.find(a=>Number(a.user_id)===Number(u.id))?.shift_name||'تخصیص نیافته')}</td></tr>`).join('')||'<tr><td colspan="2">ابتدا پرسنل را اضافه کنید.</td></tr>'}</tbody></table></div>`));
+  if(!a.items.length||!b.items.length){$('#assign-form button').disabled=true;$('#assign-form').insertAdjacentHTML('afterbegin','<p class="note">برای تخصیص، ابتدا یک کارمند فعال و یک شیفت تعریف کنید.</p>');}
   sf.elements.schedule_kind.insertAdjacentHTML('beforeend','<option value="rotation_segments">چرخشی چندبازه‌ای (الگوی خطیار)</option><option value="auto">خودکار (الگوی خطیار)</option>');
   sf.querySelector('.form-grid').insertAdjacentHTML('beforeend',
     `${field('تأخیر مجاز (دقیقه)','late_ok','number','min="0" max="360" value="0"')}${field('تعجیل مجاز (دقیقه)','early_ok','number','min="0" max="360" value="0"')}${field('اضافه‌کار قبل از شیفت (دقیقه)','ot_begin','number','min="0" max="360" value="0"')}${field('اضافه‌کار پس از شیفت (دقیقه)','ot_end','number','min="0" max="360" value="0"')}`);
@@ -174,10 +220,11 @@ async function workReport(){const now=new Date(),today=now.toISOString().slice(0
       }
     });
   }
+  if(state.view==='archives'){$('#report-form').classList.add('hidden');$('#report-results').classList.add('hidden');}
 }
 
-function tileMap(el,items,provider){
-  const lat=items.length?items[0].lat:36.2972,lng=items.length?items[0].lng:59.6067,z=12,size=256;
+function tileMap(el,items,provider,z=12){
+  const lat=items.length?items[0].lat:36.2972,lng=items.length?items[0].lng:59.6067,size=256;
   const tx=(lng+180)/360*2**z,ty=(1-Math.asinh(Math.tan(lat*Math.PI/180))/Math.PI)/2*2**z;
   el.style.position='relative';el.style.direction='ltr';el.style.overflow='hidden';
   const centerX=el.clientWidth/2,centerY=el.clientHeight/2;
@@ -193,7 +240,7 @@ function tileMap(el,items,provider){
   const attribution=document.createElement('span');attribution.textContent=provider==='neshan'?'© نشان':'© OpenStreetMap contributors';attribution.style.cssText='position:absolute;bottom:4px;right:8px;background:#fffc;padding:2px 5px;font-size:11px;z-index:3';el.append(attribution);
 }
 async function liveMap(){const [r,config]=await Promise.all([request('/api/live-map'),request('/api/neshan-tiles/config')]);const provider=r.provider==='neshan'&&config.enabled?'neshan':'osm';setContent(`<div class="section-head"><h2>آخرین موقعیت کارکنان حاضر</h2><button class="ghost" id="map-refresh">به‌روزرسانی</button></div><div class="note">موقعیت‌ها تنها هنگام حضور فعال و با ارسال اطلاعات توسط دستگاه ثبت می‌شوند. نقاط قدیمی‌تر از یک ساعت نمایش داده نمی‌شوند. ارائه‌دهنده نقشه: ${provider==='neshan'?'نشان':'OpenStreetMap'}.</div><div class="card" style="margin-top:16px"><div class="map" id="map-surface" role="img" aria-label="نقشه موقعیت کارکنان حاضر"></div></div><div class="section-head"><h2>نیروهای روی نقشه (${fa(r.items.length)})</h2></div>${card(r.items.map(p=>`<p><b>${esc(p.name)}</b> <span class="muted">${date(p.recorded_at)}</span></p>`).join('')||'<p>هنوز موقعیت معتبری از نیروهای حاضر ثبت نشده است.</p>')}`);tileMap($('#map-surface'),r.items,provider);$('#map-refresh').onclick=()=>navigate('map');}
-async function monitor(){const r=await request('/api/live-map');setContent(`<div class="grid">${card(`<div class="stat-label">نیروهای دارای موقعیت تازه</div><div class="stat-value">${fa(r.items.length)}</div>`)}${card('<div class="stat-label">روش نظارت</div><h3>حضور فعال + موقعیت GPS</h3>')}${card('<div class="stat-label">محدوده گزارش</div><h3>فقط شرکت شما</h3>')}</div><div class="section-head"><h2>وضعیت نظارت</h2></div><div class="note">ثبت موقعیت به‌صورت داوطلبانه از داخل برنامه و فقط هنگام حضور فعال انجام می‌شود. نظارت پس‌زمینه، صحت‌سنجی تصویری، هشدار قطعی GPS و اینترنت و گزارش‌های کسر کار در مراحل بعد به هسته مستقل حضوریار افزوده خواهند شد.</div><div class="section-head"><h2>ارسال موقعیت من</h2></div>${card('<p>اگر ثبت ورود کرده‌اید، می‌توانید موقعیت فعلی خود را برای نقشه زنده ارسال کنید.</p><button id="send-location" class="primary">ارسال موقعیت فعلی</button>')}`);$('#send-location').onclick=guard(async()=>{const c=await coords();await request('/api/location','POST',c);toast('موقعیت فعلی ثبت شد');});}
+async function monitor(){await admin.render('tracking');}
 async function settings(){const s=await request('/api/settings');setContent(`<div class="section-head"><h2>تنظیمات مستقل شرکت</h2></div><form id="settings-form" class="card stack"><div class="form-grid"><label>ارائه‌دهنده نقشه<select name="map_provider"><option value="osm" ${s.map_provider==='osm'?'selected':''}>OpenStreetMap</option><option value="neshan" ${s.map_provider==='neshan'?'selected':''}>نشان</option></select></label><label>سرویس پیامک<select name="sms_provider"><option value="disabled">غیرفعال</option><option value="kavenegar" ${s.sms_provider==='kavenegar'?'selected':''}>کاوه‌نگار</option></select></label>${field('کلید API نقشه نشان (اختیاری)','neshan_api_key','password','autocomplete="off"')}${field('کلید API پیامک (اختیاری)','sms_api_key','password','autocomplete="off"')}${field('عرض جغرافیایی محل کار','geofence_lat','number','step="any"')}${field('طول جغرافیایی محل کار','geofence_lng','number','step="any"')}${field('شعاع مجاز (متر)','geofence_radius_m','number','min="50" max="50000"')}</div><p class="muted">کلیدهای ذخیره‌شده به مرورگر بازگردانده نمی‌شوند. برای حفظ کلید فعلی، فیلد آن را خالی بگذارید.</p><label><input name="require_location" type="checkbox" style="width:auto;min-height:auto" ${s.require_location?'checked':''}> ثبت ورود با موقعیت مکانی اجباری باشد</label><h3>امکانات فعال شرکت</h3><div class="form-grid">${Object.entries({attendance:'حضور و غیاب',shifts:'شیفت‌ها',liveMap:'نقشه زنده',monitoring:'نظارت',sms:'سامانه پیامک'}).map(([k,v])=>`<label><input type="checkbox" style="width:auto;min-height:auto" name="feature_${k}" ${s.features[k]?'checked':''}> ${v}</label>`).join('')}</div><button class="primary">ذخیره تنظیمات</button></form><div class="section-head"><h2>آزمون ارسال پیامک</h2></div>${form('ارسال پیامک آزمایشی',field('شماره موبایل','mobile','tel','pattern="09[0-9]{9}"')+field('متن پیامک','message'),'sms-form')}`);
   $('#settings-form .form-grid').insertAdjacentHTML('beforeend',`<label>گردش تأیید درخواست<select name="approval_steps"><option value="1" ${s.approval_steps===1?'selected':''}>یک‌مرحله‌ای</option><option value="2" ${s.approval_steps===2?'selected':''}>دو‌مرحله‌ای (مدیر سپس مدیر شرکت)</option></select></label>`);
   $('#settings-form .form-grid').insertAdjacentHTML('beforeend',`<label>سهمیه سالانه مرخصی استحقاقی هر نفر (دقیقه)<input name="annual_leave_minutes" type="number" min="0" max="525600" value="${s.annual_leave_minutes}" required></label>`);
@@ -208,22 +255,120 @@ async function settings(){const s=await request('/api/settings');setContent(`<di
   const holidays=await request('/api/holidays');
   $('#content').insertAdjacentHTML('beforeend',`<div class="section-head"><h2>تعطیلات اختصاصی شرکت</h2></div><div class="note">تعطیلات رسمی از سرویس مستقل تقویم ایران به‌صورت برخط دریافت و روی سرور ذخیره می‌شوند؛ هنگام قطعی از نسخه ذخیره‌شده استفاده می‌شود. تعطیلات دستی این بخش فقط برای شرکت شما هستند.</div><form id="holiday-form" class="card stack" style="margin-top:16px"><div class="form-grid">${field('تاریخ (میلادی)','work_date','date')}${field('عنوان تعطیلی','title')}</div><button class="primary">ذخیره تعطیلی</button></form>${card(`<h3>تعطیلات ثبت‌شده</h3><div class="table-wrap"><table class="table"><thead><tr><th>تاریخ</th><th>عنوان</th></tr></thead><tbody>${holidays.items.map(h=>`<tr><td>${esc(h.work_date)}</td><td>${esc(h.title)}</td></tr>`).join('')||'<tr><td colspan="2">تعطیلی اختصاصی ثبت نشده است.</td></tr>'}</tbody></table></div>`)}`);
   $('#holiday-form').onsubmit=guard(async e=>{await request('/api/holidays','POST',formData(e.target));toast('تعطیلی ذخیره شد');await settings();});
-  if(state.user.role==='owner')await zoneManagement();
+
 }
 
+function workplaceNew(){
+  setContent(`<div class="workplace-new">
+    <nav class="workplace-path" aria-label="مسیر صفحه"><button type="button" class="ghost" id="zone-back">محل کار</button><span aria-hidden="true"> / </span><span>ثبت محل کار جدید</span></nav>
+    <form id="zone-create" class="card workplace-form">
+      <div class="workplace-fields workplace-address">
+        <label>نام محل کار<input name="name" placeholder="نام محل کار را وارد کنید" maxlength="100" required></label>
+        <label>شهر<input name="city" placeholder="شهر را وارد کنید" maxlength="100"></label>
+        <label>آدرس<input name="address" placeholder="آدرس را وارد کنید" maxlength="500"></label>
+      </div>
+      <section class="workplace-location" aria-labelledby="zone-location-title">
+        <h3 id="zone-location-title">موقعیت مکانی</h3>
+        <div class="workplace-fields">
+          <label>شکل هندسی محل کار<select name="geometry"><option value="circle">دایره</option></select></label>
+          <label>شعاع (متر)<input name="radius_m" type="number" min="50" max="50000" value="100" required></label>
+        </div>
+        <div class="workplace-map-frame">
+          <div class="map" id="zone-map" aria-label="نقشه انتخاب محل کار"></div>
+          <div class="workplace-map-controls"><button type="button" id="zone-zoom-in" aria-label="بزرگ‌نمایی">+</button><button type="button" id="zone-zoom-out" aria-label="کوچک‌نمایی">−</button></div>
+        <div class="workplace-coordinates">
+          <label>عرض جغرافیایی<input name="lat" type="number" step="any" min="-85" max="85" value="35.6892" required></label>
+          <label>طول جغرافیایی<input name="lng" type="number" step="any" min="-180" max="180" value="51.389" required></label>
+          <button type="button" class="primary" id="zone-find">جستجو</button>
+        </div></div>
+      </section>
+      <section class="workplace-location" aria-labelledby="zone-wifi-title">
+        <h3 id="zone-wifi-title">WiFi (BSSID) <span class="badge">اختیاری</span></h3>
+        <p class="note">با افزودن شناسهٔ مودم، ثبت ورود در اپ اندروید به حضور در محدودهٔ سیگنال وای‌فای نیاز دارد. اتصال به شبکه لازم نیست.</p>
+        <div id="zone-wifi-list" class="stack"></div>
+        <div class="action-row"><button type="button" class="ghost" id="zone-wifi-add">افزودن WiFi</button></div>
+      </section>
+      <p class="error" id="zone-error" role="alert"></p>
+      <div class="action-row"><button type="submit" class="primary">ثبت</button></div>
+    </form>
+  </div>`);
+  $('#zone-back').onclick=()=>navigate('workplaces');
+  const form=$('#zone-create'),map=$('#zone-map');
+  const wifiList=$('#zone-wifi-list'),wifiAdd=$('#zone-wifi-add');
+  wifiAdd.onclick=()=>{
+    if(wifiList.children.length>=20)return;
+    const row=document.createElement('div');
+    row.className='action-row';
+    row.innerHTML='<label>شناسه وای‌فای<input name="wifi_bssid" dir="ltr" placeholder="00:11:22:33:44:55" maxlength="17" pattern="(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}" required></label><button type="button" class="ghost" aria-label="حذف شناسه وای‌فای">حذف</button>';
+    wifiList.append(row);
+    row.querySelector('input').focus();
+    wifiAdd.disabled=wifiList.children.length>=20;
+    row.querySelector('button').onclick=()=>{
+      row.remove();
+      wifiAdd.disabled=false;
+      wifiAdd.focus();
+    };
+  };
+  let lat=35.6892,lng=51.389,zoom=12;
+  const render=()=>{
+    map.replaceChildren();
+    tileMap(map,[{lat,lng,name:'مرکز نقشه'}],'osm',zoom);
+    const radius=form.elements.radius_m;
+    if(!radius.value||!radius.validity.valid)return;
+    const metersPerPixel=40075016.686*Math.cos(lat*Math.PI/180)/(256*2**zoom);
+    const boundary=document.createElement('span');
+    boundary.className='workplace-boundary';
+    boundary.setAttribute('aria-hidden','true');
+    boundary.style.width=boundary.style.height=2*Number(radius.value)/metersPerPixel+'px';
+    map.prepend(boundary);
+  };
+  form.elements.radius_m.addEventListener('input',render);
+  function select(latValue,lngValue){
+    lat=Math.max(-85,Math.min(85,latValue));
+    lng=((lngValue+540)%360)-180;
+    form.elements.lat.value=lat.toFixed(7);
+    form.elements.lng.value=lng.toFixed(7);
+    render();
+  }
+  map.onclick=event=>{
+    const bounds=map.getBoundingClientRect(),scale=256*2**zoom;
+    const x=(lng+180)/360+(event.clientX-bounds.left-bounds.width/2)/scale;
+    const y=(1-Math.asinh(Math.tan(lat*Math.PI/180))/Math.PI)/2+(event.clientY-bounds.top-bounds.height/2)/scale;
+    select(Math.atan(Math.sinh(Math.PI*(1-2*y)))*180/Math.PI,x*360-180);
+  };
+  $('#zone-zoom-in').onclick=()=>{zoom=Math.min(18,zoom+1);render();};
+  $('#zone-zoom-out').onclick=()=>{zoom=Math.max(3,zoom-1);render();};
+  $('#zone-find').onclick=()=>{
+    if(form.elements.lat.reportValidity()&&form.elements.lng.reportValidity()){
+      select(Number(form.elements.lat.value),Number(form.elements.lng.value));
+    }
+  };
+  render();
+  $('#zone-create').onsubmit=async e=>{
+    e.preventDefault();
+    const b=formData(e.target),button=e.target.querySelector('button[type="submit"]');
+    const wifi_bssids=new FormData(e.target).getAll('wifi_bssid');
+    button.disabled=true;$('#zone-error').textContent='';
+    try{
+      await request('/api/zones','POST',{name:b.name,city:b.city,address:b.address,requires_substitute:b.requires_substitute==='1',lat:b.lat===''?null:Number(b.lat),lng:b.lng===''?null:Number(b.lng),radius_m:Number(b.radius_m),wifi_bssids});
+      if(!e.target.isConnected)return;toast('محل کار ثبت شد');await navigate('workplaces');
+    }catch(error){const message=$('#zone-error');if(message)message.textContent=error.message;}
+    finally{button.disabled=false;}
+  };
+}
 async function zoneManagement(){
   const [{items:zones},{items:people}]=await Promise.all([request('/api/zones'),request('/api/users')]);
-  $('#content').insertAdjacentHTML('beforeend',`<div class="section-head"><h2>مناطق کاری و جانشینی مرخصی</h2><span class="badge">${fa(zones.length)} منطقه</span></div>
+  $('#content').insertAdjacentHTML('beforeend',`<div class="section-head"><h2>محل‌های کار و جانشینی مرخصی</h2><span class="badge">${fa(zones.length)} منطقه</span></div>
     <div class="note">این تنظیمات مستقل از شرکت‌های دیگرند. الزام جانشین تنها برای مرخصی استحقاقی روزانه کارکنان هر منطقه فعال می‌شود. جانشین در بازه مرخصی، شیفت نیروی غایب را پوشش می‌دهد.</div>
-    <form id="zone-create" class="card stack" style="margin-top:16px"><h3>تعریف منطقه جدید</h3><div class="form-grid"><label>نام منطقه<input name="name" maxlength="120" required placeholder="مانند دفتر مرکزی"></label><label>سیاست مرخصی<select name="requires_substitute"><option value="0">بدون الزام جانشین</option><option value="1">جانشین الزامی برای مرخصی روزانه</option></select></label></div><button class="primary">افزودن منطقه</button></form>
-    ${card(`<h3>سیاست مناطق</h3><div class="table-wrap"><table class="table"><thead><tr><th>نام منطقه</th><th>جانشین مرخصی</th><th>تغییر سیاست</th></tr></thead><tbody>${zones.map(z=>`<tr><td>${esc(z.name)}</td><td>${z.requires_substitute?'الزامی':'اختیاری'}</td><td><button class="ghost zone-toggle" type="button" data-id="${z.id}" data-next="${z.requires_substitute?0:1}">${z.requires_substitute?'لغو الزام':'فعال‌کردن الزام'}</button></td></tr>`).join('')||'<tr><td colspan="3">هنوز منطقه‌ای تعریف نشده است.</td></tr>'}</tbody></table></div>`)}
+    <div class="action-row"><button class="primary" id="zone-open">ثبت محل کار جدید</button></div>
+    ${card(`<h3>سیاست مناطق</h3><div class="table-wrap"><table class="table"><thead><tr><th>نام منطقه</th><th>جانشین مرخصی</th><th>تغییر سیاست</th></tr></thead><tbody>${zones.map(z=>`<tr><td>${esc(z.name)}<div class="muted">${esc([z.city,z.address].filter(Boolean).join("، "))}</div></td><td>${z.requires_substitute?'الزامی':'اختیاری'}</td><td><button class="ghost zone-toggle" type="button" data-id="${z.id}" data-next="${z.requires_substitute?0:1}">${z.requires_substitute?'لغو الزام':'فعال‌کردن الزام'}</button></td></tr>`).join('')||'<tr><td colspan="3">هنوز منطقه‌ای تعریف نشده است.</td></tr>'}</tbody></table></div>`)}
     <form id="staff-zone" class="card stack"><h3>منطقه و مجوز جانشینی کارکنان</h3><div class="form-grid"><label>کارمند<select name="user_id">${people.filter(p=>p.active).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label><label>منطقه کاری<select name="zone_id"><option value="">بدون منطقه</option>${zones.map(z=>`<option value="${z.id}">${esc(z.name)}</option>`).join('')}</select></label></div><label><input name="can_be_substitute" type="checkbox" style="width:auto;min-height:auto"> این کارمند مجاز به جانشینی دیگران است</label><button class="primary">ذخیره تخصیص کارمند</button></form>`);
-  $('#zone-create').onsubmit=guard(async e=>{const b=formData(e.target);await request('/api/zones','POST',{name:b.name,requires_substitute:b.requires_substitute==='1'});toast('منطقه ایجاد شد');await settings();});
-  document.querySelectorAll('.zone-toggle').forEach(button=>button.onclick=guard(async()=>{button.disabled=true;await request('/api/zones/'+button.dataset.id,'PATCH',{requires_substitute:button.dataset.next==='1'});toast('سیاست منطقه ذخیره شد');await settings();}));
+  $('#zone-open').onclick=()=>navigate('workplace-new');
+  document.querySelectorAll('.zone-toggle').forEach(button=>button.onclick=guard(async()=>{button.disabled=true;await request('/api/zones/'+button.dataset.id,'PATCH',{requires_substitute:button.dataset.next==='1'});toast('سیاست منطقه ذخیره شد');await navigate('workplaces');}));
   const staffForm=$('#staff-zone');
   function selectStaff(){const selected=people.find(p=>String(p.id)===staffForm.elements.user_id.value);staffForm.elements.zone_id.value=selected?.zone_id??'';staffForm.elements.can_be_substitute.checked=!!selected?.can_be_substitute;}
   staffForm.elements.user_id.onchange=selectStaff;selectStaff();
-  staffForm.onsubmit=guard(async e=>{const b=formData(e.target);await request('/api/users/'+b.user_id+'/zone','PATCH',{zone_id:b.zone_id===''?null:Number(b.zone_id),can_be_substitute:staffForm.elements.can_be_substitute.checked});toast('منطقه و مجوز جانشینی ذخیره شد');await settings();});
+  staffForm.onsubmit=guard(async e=>{const b=formData(e.target);await request('/api/users/'+b.user_id+'/zone','PATCH',{zone_id:b.zone_id===''?null:Number(b.zone_id),can_be_substitute:staffForm.elements.can_be_substitute.checked});toast('منطقه و مجوز جانشینی ذخیره شد');await navigate('workplaces');});
 }
 
 async function platformCompanies(){
@@ -240,5 +385,5 @@ $('#platform-login').onchange=e=>{const company=$('#login-form [name=company]');
 $('#login-form').onsubmit=guard(async e=>{const b=formData(e.target);state.platform=!!b.platform;const res=await request(state.platform?'/api/platform/login':'/api/login','POST',state.platform?{username:b.username,password:b.password}:b);state.token=res.token;sessionStorage.setItem('hz_token',state.token);sessionStorage.setItem('hz_platform',state.platform?'1':'0');$('#login-error').textContent='';await authenticate();});
 $('#nav').onclick=e=>{const b=e.target.closest('button[data-view]');if(b && !b.classList.contains('hidden'))navigate(b.dataset.view);};
 $('#logout').onclick=guard(async()=>{await request(state.platform?'/api/platform/logout':'/api/logout','POST');loginScreen();});
-window.addEventListener('hashchange',()=>{const view=location.hash.slice(1);const button=document.querySelector(`#nav button[data-view="${CSS.escape(view)}"]`);if(state.user&&button&&!button.classList.contains('hidden'))navigate(view);});
+window.addEventListener('hashchange',()=>{let view=location.hash.slice(1);if(view==='attendance')view=state.user?.role==='employee'?'mobile':'traffic';const button=document.querySelector(`#nav button[data-view="${CSS.escape(view)}"]`);if(state.user&&((view==='workplace-new'&&state.user.role==='owner'&&!state.platform)||(button&&!button.classList.contains('hidden'))))navigate(view);});
 if(state.token)authenticate().catch(()=>loginScreen());

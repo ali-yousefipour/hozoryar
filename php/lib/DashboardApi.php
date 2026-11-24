@@ -20,7 +20,29 @@ final class DashboardApi {
           WHERE a.company_id=? AND u.active=1 AND $dateExpr BETWEEN ? AND ?
           GROUP BY day ORDER BY day",[$cid,$from,$to]);
         foreach($arrivals as &$row){$row['sessions']=(int)$row['sessions'];$row['employees']=(int)$row['employees'];}unset($row);
+        $personnel=Db::all('SELECT u.id,u.name,z.name workplace,MAX(a.checked_in_at) checked_in_at FROM users u
+          LEFT JOIN attendance a ON a.company_id=u.company_id AND a.user_id=u.id AND a.checked_out_at IS NULL
+          LEFT JOIN zones z ON z.company_id=u.company_id AND z.id=u.zone_id
+          WHERE u.company_id=? AND u.active=1 GROUP BY u.id,u.name,z.name ORDER BY u.name',[$cid]);
+        $approved=Db::all("SELECT DISTINCT r.user_id id,u.name,(r.type='mission') mission
+          FROM personnel_requests r JOIN users u ON u.company_id=r.company_id AND u.id=r.user_id
+          WHERE r.company_id=? AND u.active=1 AND r.status='approved' AND ? BETWEEN r.work_date AND r.end_date
+          ORDER BY u.name",[$cid,$today]);
+        $leavePeople=[];$missionPeople=[];$excused=[];
+        foreach($approved as $person){
+            $id=(int)$person['id'];$excused[$id]=true;
+            $entry=['id'=>$id,'name'=>$person['name']];
+            if($person['mission'])$missionPeople[]=$entry;else $leavePeople[]=$entry;
+        }
+        $presentPeople=[];$absentPeople=[];
+        foreach($personnel as $person){
+            $person['id']=(int)$person['id'];
+            if($person['checked_in_at']!==null)$presentPeople[]=$person;else $absentPeople[]=$person;
+        }
         respond(200,['total'=>$total,'present'=>$present,'absent'=>max(0,$total-$present),
+          'present_people'=>$presentPeople,'absent_people'=>$absentPeople,
+          'unexcused_people'=>array_values(array_filter($absentPeople,static fn($p)=>!isset($excused[$p['id']]))),
+          'leave_people'=>$leavePeople,'mission_people'=>$missionPeople,
           'company'=>$user['company_name'],'period'=>['from'=>$from,'to'=>$to],'arrivals'=>$arrivals]);
     }
 }

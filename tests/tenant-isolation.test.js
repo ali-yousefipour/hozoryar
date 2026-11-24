@@ -22,11 +22,11 @@ db.prepare('INSERT INTO official_calendar_years(jalali_year,payload_json,fetched
 db.prepare('INSERT INTO official_calendar_years(jalali_year,payload_json,fetched_at) VALUES(?,?,?)').run(1404,
   JSON.stringify({days:{},estimated:false}),new Date().toISOString());
 db.close();
-const { createServer }=await import('../server/index.js');
+const { createServer,closeDatabase }=await import('../server/index.js');
 const server=createServer();
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const origin=`http://127.0.0.1:${server.address().port}`;
-test.after(async()=>{await new Promise(resolve=>server.close(resolve));rmSync(folder,{recursive:true,force:true});});
+test.after(async()=>{await new Promise(resolve=>server.close(resolve));closeDatabase();rmSync(folder,{recursive:true,force:true});});
 
 async function api(path,token,method='GET',body){const res=await fetch(origin+path,{method,headers:{...(token?{Authorization:'Bearer '+token}:{}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});return {status:res.status,body:await res.json()};}
 const a=(await api('/api/login',null,'POST',{company:'alpha',username:'admin',password:'strong-password-123'})).body.token;
@@ -39,6 +39,13 @@ test('different companies have separate users, settings and dashboard',async()=>
   assert.equal((await api('/api/users',b)).body.items.length,1);
   assert.equal((await api('/api/dashboard',a)).body.total,2);
   assert.equal((await api('/api/dashboard',b)).body.total,1);
+  assert.equal((await api('/api/setup')).status,401);
+  assert.equal((await api('/api/setup',a)).body.counts.personnel,1);
+  assert.equal((await api('/api/setup',b)).body.counts.personnel,0);
+  assert.equal((await api('/api/setup',a)).body.steps.assigned,false);
+  assert.deepEqual((await api('/api/assignments',a)).body.items,[]);
+  assert.ok((await (await fetch(origin+'/')).text()).includes('از ثبت حضور'));
+  assert.ok((await (await fetch(origin+'/login')).text()).includes('login-form'));
   assert.equal((await api('/api/dashboard?from=2026-10-20&to=2026-10-22',a)).body.arrivals.length,0);
   assert.equal((await api('/api/dashboard?from=2026-09-01&to=2026-11-01',a)).status,400);
   assert.equal((await api('/api/settings',a)).body.neshan_key_configured,false);
@@ -409,6 +416,7 @@ test('financial signoff requires owner and managerial approval and locks a diges
 });
 
 test('platform administrator alone can configure per-company subscription and personnel quota',async()=>{
+  const tehranNow=Date.now()+12600000,today=new Date(tehranNow).toISOString().slice(0,10),yesterday=new Date(tehranNow-86400000).toISOString().slice(0,10);
   const login=await api('/api/platform/login',null,'POST',{username:'root',password:'platform-strong-pass-123'});
   assert.equal(login.status,200);const platform=login.body.token;
   assert.equal((await api('/api/platform/companies',a)).status,401);
@@ -420,9 +428,9 @@ test('platform administrator alone can configure per-company subscription and pe
   assert.equal((await api('/api/users',a,'POST',{name:'کاربر چهارم',username:'fourth',password:'strong-password-123',role:'employee'})).status,409);
   assert.equal((await api('/api/platform/companies/1/subscription',platform,'PATCH',{max_personnel:4})).status,200);
   assert.equal((await api('/api/users',a,'POST',{name:'کاربر چهارم',username:'fourth',password:'strong-password-123',role:'employee'})).status,201);
-  assert.equal((await api('/api/platform/companies/2/subscription',platform,'PATCH',{subscription_end:'2026-11-01'})).status,200);
+  assert.equal((await api('/api/platform/companies/2/subscription',platform,'PATCH',{subscription_end:today})).status,200);
   assert.equal((await api('/api/me',b)).body.subscription.expired,false);
-  assert.equal((await api('/api/platform/companies/2/subscription',platform,'PATCH',{subscription_end:'2026-10-31',max_personnel:1})).status,200);
+  assert.equal((await api('/api/platform/companies/2/subscription',platform,'PATCH',{subscription_end:yesterday,max_personnel:1})).status,200);
   assert.equal((await api('/api/me',b)).body.subscription.expired,true);
   assert.equal((await api('/api/users',b)).status,200);
   assert.equal((await api('/api/users',b,'POST',{name:'ممنوع',username:'blocked',password:'strong-password-123',role:'employee'})).status,402);

@@ -1,3 +1,5 @@
+> مسیر اصلی استقرار وب PHP/MySQL است؛ راهنمای فعال: [SHARED_HOST_SETUP.md](SHARED_HOST_SETUP.md). بخش‌های Node/SQLite این سند مرجع رفتار نسخه قبلی هستند.
+
 # معماری حضوریار — نسخه پایه 0.1
 
 ## چندشرکتی (Multi-tenant)
@@ -61,8 +63,8 @@
 نیازمند Node.js 22.13 یا جدیدتر است و وابستگی npm خارجی ندارد.
 
 ```bash
-npm run bootstrap -- acme "شرکت نمونه" admin "replace-with-strong-password" "مدیر سامانه"
-npm start
+npm run bootstrap:reference -- acme "شرکت نمونه" admin "replace-with-strong-password" "مدیر سامانه"
+npm run start:reference
 ```
 
 سپس `http://127.0.0.1:3000` را باز کنید. برای کار با GPS مرورگر، دامنه امن HTTPS لازم است (localhost استثنا است).

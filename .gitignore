@@ -7,3 +7,8 @@ data/
 mobile/dist/
 mobile/.expo/
 backups/
+php/config.php
+data-server*.log
+.impeccable/review/
+__pycache__/
+*.py[cod]

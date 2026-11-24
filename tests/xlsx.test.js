@@ -12,9 +12,9 @@ test('archived monthly report exports a valid RTL styled XLSX with duration cell
   const folder=mkdtempSync(join(tmpdir(),'hozoryar-xlsx-'));
   try{
     const path=join(folder,'report.xlsx');writeFileSync(path,data);
-    const check=spawnSync('unzip',['-t',path],{encoding:'utf8'});
+    const check=spawnSync('python',['-c','import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None',path],{encoding:'utf8'});
     assert.equal(check.status,0,check.stdout+check.stderr);
-    const xml=spawnSync('unzip',['-p',path,'xl/worksheets/sheet1.xml'],{encoding:'utf8'});
+    const xml=spawnSync('python',['-c',"import sys,zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read('xl/worksheets/sheet1.xml'))",path],{encoding:'utf8'});
     assert.equal(xml.status,0);
     assert.match(xml.stdout,/rightToLeft="1"/);
     assert.match(xml.stdout,/نیروی &lt;نمونه&gt;/);

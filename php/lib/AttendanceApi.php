@@ -13,7 +13,7 @@ final class AttendanceApi {
         $h=sin($lat/2)**2+cos(deg2rad($a))*cos(deg2rad($c))*sin($lng/2)**2;
         return 2*$r*asin(min(1,sqrt($h)));
     }
-    public static function handle(string $path,string $method,array $user): bool {
+    public static function handle(string $path,string $method,array $user,?array $body=null,?array $device=null): bool {
         if($path!=='/api/attendance')return false;
         $cid=(int)$user['company_id'];$uid=(int)$user['id'];
         $settings=PersonnelApi::settings($cid);
@@ -26,10 +26,14 @@ final class AttendanceApi {
                 $target=(int)$_GET['user_id'];
                 if(!Db::one('SELECT id FROM users WHERE company_id=? AND id=?',[$cid,$target]))respond(404,['error'=>'کارمند یافت نشد']);
             }
-            respond(200,['items'=>Db::all('SELECT id,checked_in_at,checked_out_at,lat,lng FROM attendance WHERE company_id=? AND user_id=? ORDER BY id DESC LIMIT 100',[$cid,$target])]);
+            $wifi=Db::one('SELECT z.wifi_bssids FROM users u JOIN zones z ON z.company_id=u.company_id AND z.id=u.zone_id WHERE u.company_id=? AND u.id=?',[$cid,$target]);
+            respond(200,[
+                'items'=>Db::all('SELECT id,checked_in_at,checked_out_at,lat,lng FROM attendance WHERE company_id=? AND user_id=? ORDER BY id DESC LIMIT 100',[$cid,$target]),
+                'requires_workplace_wifi'=>!empty($wifi['wifi_bssids']),
+            ]);
         }
         if($method!=='POST')return false;
-        $b=jsonBody();$action=$b['action']??null;
+        $b=$body??jsonBody();$action=$b['action']??null;
         if(!in_array($action,['in','out'],true))respond(400,['error'=>'عملیات نامعتبر است']);
         $event=$b['event_id']??null;
         if($event!==null&&(!is_string($event)||!preg_match('/^[a-zA-Z0-9_-]{16,64}$/',$event)))respond(400,['error'=>'شناسه رویداد نامعتبر است']);
@@ -39,6 +43,10 @@ final class AttendanceApi {
             // Match archive/request lock order and serialize punches against finalization.
             Db::one('SELECT id FROM companies WHERE id=? FOR UPDATE',[$cid]);
             Db::one('SELECT id FROM users WHERE company_id=? AND id=? FOR UPDATE',[$cid,$uid]);
+            if($device!==null){
+                DevicesApi::verify($device,$uid);
+                Db::run('UPDATE attendance_devices SET last_seen_at=UTC_TIMESTAMP() WHERE id=?',[$device['id']]);
+            }
             if($event!==null){
                 $prior=Db::one('SELECT action,attendance_id,recorded_at FROM attendance_events WHERE company_id=? AND user_id=? AND event_id=?',[$cid,$uid,$event]);
                 if($prior){
@@ -54,10 +62,31 @@ final class AttendanceApi {
                 }
             }
             $lat=$b['lat']??null;$lng=$b['lng']??null;$accuracy=$b['accuracy']??null;
-            if($action==='in'&&$settings['require_location']&&!self::coords($lat,$lng,$accuracy)){
+            $workplace=Db::one('SELECT z.geofence_lat,z.geofence_lng,z.geofence_radius_m,z.wifi_bssids FROM users u
+                JOIN zones z ON z.company_id=u.company_id AND z.id=u.zone_id WHERE u.company_id=? AND u.id=?',[$cid,$uid]);
+            if($action==='in'&&!empty($workplace['wifi_bssids'])){
+                $allowed=json_decode($workplace['wifi_bssids'],true,512,JSON_THROW_ON_ERROR);
+                $observed=$b['wifi_fingerprints']??[];
+                if(!is_array($observed)||!array_is_list($observed)||count($observed)>256){
+                    $pdo->rollBack();respond(400,['error'=>'دادهٔ بررسی وای‌فای نامعتبر است']);
+                }
+                foreach($observed as $fingerprint){
+                    if(!is_string($fingerprint)||!preg_match('/\A[0-9a-f]{64}\z/',$fingerprint)){
+                        $pdo->rollBack();respond(400,['error'=>'دادهٔ بررسی وای‌فای نامعتبر است']);
+                    }
+                }
+                $expected=array_map(static fn($bssid)=>hash('sha256',$cid.':'.$uid.':'.$event.':'.$bssid),$allowed);
+                if($event===null||!array_intersect($expected,$observed)){
+                    $pdo->rollBack();respond(403,['error'=>'وای‌فای ثبت‌شدهٔ محل کار در دسترس نیست']);
+                }
+            }
+            if($workplace&&$workplace['geofence_lat']!==null&&$workplace['geofence_lng']!==null){
+                foreach(['geofence_lat','geofence_lng','geofence_radius_m'] as $key)$settings[$key]=$workplace[$key];
+            }
+            if($device===null&&$action==='in'&&$settings['require_location']&&!self::coords($lat,$lng,$accuracy)){
                 $pdo->rollBack();respond(400,['error'=>'موقعیت مکانی معتبر لازم است']);
             }
-            if($action==='in'&&$settings['geofence_lat']!==null&&$settings['geofence_lng']!==null){
+            if($device===null&&$action==='in'&&$settings['geofence_lat']!==null&&$settings['geofence_lng']!==null){
                 if(!self::coords($lat,$lng,$accuracy)||self::distance((float)$lat,(float)$lng,(float)$settings['geofence_lat'],(float)$settings['geofence_lng'])>(int)$settings['geofence_radius_m']){
                     $pdo->rollBack();respond(403,['error'=>'خارج از محدوده مجاز هستید']);
                 }
@@ -73,7 +102,8 @@ final class AttendanceApi {
                 $id=(int)$active['id'];Db::run('UPDATE attendance SET checked_out_at=? WHERE id=? AND company_id=?',[$at,$id,$cid]);
             }
             if($event!==null)Db::run('INSERT INTO attendance_events(company_id,user_id,event_id,action,attendance_id,recorded_at) VALUES(?,?,?,?,?,?)',[$cid,$uid,$event,$action,$id,$at]);
-            Db::run('INSERT INTO audit_logs(company_id,actor_user_id,action,target_type,target_id) VALUES(?,?,?,?,?)',[$cid,$uid,'attendance.'.$action,'attendance',$id]);
+            $auditAction=$device===null?'attendance.'.$action:'attendance.device.'.$action;
+            Db::run('INSERT INTO audit_logs(company_id,actor_user_id,action,target_type,target_id) VALUES(?,?,?,?,?)',[$cid,$uid,$auditAction,'attendance',$id]);
             $pdo->commit();respond(201,['id'=>$id,'at'=>$at,'replayed'=>false]);
         }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
     }

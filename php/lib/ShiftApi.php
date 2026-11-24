@@ -46,6 +46,7 @@ final class ShiftApi {
         if($user['role']==='employee')respond(403,['error'=>'دسترسی مدیریتی لازم است']);
         $settings=PersonnelApi::settings($cid);
         if(empty($settings['features']['shifts']))respond(403,['error'=>'شیفت‌ها برای این شرکت فعال نیست']);
+        if($path==='/api/assignments'&&$method==='GET')respond(200,['items'=>Db::all('SELECT a.user_id,a.shift_id,u.name,s.name shift_name FROM assignments a JOIN users u ON u.company_id=a.company_id AND u.id=a.user_id JOIN shifts s ON s.company_id=a.company_id AND s.id=a.shift_id WHERE a.company_id=? AND u.active=1 ORDER BY u.name',[$cid])]);
         if($path==='/api/shifts'&&$method==='GET')respond(200,['items'=>Db::all('SELECT id,name,start_time,end_time,duty_minutes,daily_ot_cap,schedule_kind,schedule_json FROM shifts WHERE company_id=? ORDER BY id DESC',[$cid])]);
         if($path==='/api/shifts'&&$method==='POST'){
             $b=jsonBody();$kind=$b['schedule_kind']??'fixed';$schedule=$b['schedule']??[];
