@@ -15,10 +15,10 @@ try {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
     $files = glob(dirname(__DIR__) . '/db/*.sql'); sort($files);
     foreach ($files as $file) {
-        $name = basename($file); $hash = hash_file('sha256', $file);
+        $name = basename($file); $hash = hash('sha256',str_replace(["\r\n","\r"],"\n",file_get_contents($file)));
         $row = Db::one('SELECT checksum,status FROM schema_migrations WHERE name=?', [$name]);
         if ($row) {
-            if ($row['checksum'] !== $hash || $row['status'] !== 'applied') {
+            if (($row['checksum'] !== $hash && $row['checksum'] !== hash_file('sha256',$file)) || $row['status'] !== 'applied') {
                 throw new RuntimeException("Inspect incomplete or changed migration: $name");
             }
             echo "Already applied: $name\n"; continue;

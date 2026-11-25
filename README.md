@@ -101,3 +101,7 @@ npm run platform-admin:reference -- <username> <display-name>
 - موقعیت‌یابی پس‌زمینه در اندروید اختیاری است؛ آزمایش باتری، مجوزها و رفتار سازندگان گوشی روی دستگاه واقعی ضروری است.
 - گزارش بایگانی و تأیید مدیریتی به معنای محاسبه قطعی حقوق نیست؛ برای قواعد مالی پیشرفته باید نمونه‌های مرجع `ShiftCalc.php` به‌صورت کامل تطبیق داده شوند.
 - نسخه پشتیبان را می‌توان با `npm run backup:reference` گرفت و با `npm run verify-backup:reference -- /absolute/path/backup.sqlite` بررسی کرد. برای بازیابی **ابتدا سرویس را کاملاً متوقف کنید** و مطمئن شوید فایل‌های `-wal` و `-shm` وجود ندارند؛ سپس `DB_PATH=/absolute/path/hozoryar.sqlite npm run restore-backup:reference -- /absolute/path/backup.sqlite --offline-confirm` را اجرا کنید. فایل قبلی با پسوند `.pre-restore-...` حفظ می‌شود. این ابزار برای اجرای آنلاین نیست و بازیابی آزمایشی روی کپی مستقل پیش از استفاده عملیاتی ضروری است.
+
+## ایمپورت دستی دیتابیس
+
+فایل نصب کامل: [php/db/migrations/hozoryar-install.sql](php/db/migrations/hozoryar-install.sql). فقط روی دیتابیس جدید و خالی ایمپورت شود. [راهنمای ایمپورت و محل اتصال دیتابیس](php/db/migrations/README.md) مسیر ثابت `public_html/_private/hozoryar/php/config.php` در استقرار فعلی را توضیح می‌دهد؛ فایل واقعی config در مخزن ذخیره نمی‌شود.

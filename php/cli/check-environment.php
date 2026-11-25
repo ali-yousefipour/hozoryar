@@ -10,7 +10,8 @@ try{
     $applied=Db::all('SELECT name,checksum,status FROM schema_migrations');$byName=array_column($applied,null,'name');
     $checks['migrations']=true;
     foreach(glob(dirname(__DIR__).'/db/*.sql') as $file){$row=$byName[basename($file)]??null;
-        if(!$row||$row['status']!=='applied'||!hash_equals($row['checksum'],hash_file('sha256',$file)))$checks['migrations']=false;}
+        $canonical=hash('sha256',str_replace(["\r\n","\r"],"\n",file_get_contents($file)));
+        if(!$row||$row['status']!=='applied'||(!hash_equals($row['checksum'],$canonical)&&!hash_equals($row['checksum'],hash_file('sha256',$file))))$checks['migrations']=false;}
 }catch(Throwable $e){$checks['mysql_schema']=false;}
 if(in_array('--online',$argv,true)){
     try{require_once dirname(__DIR__).'/lib/CalendarApi.php';$today=(new DateTimeImmutable('now',new DateTimeZone('Asia/Tehran')))->format('Y-m-d');
